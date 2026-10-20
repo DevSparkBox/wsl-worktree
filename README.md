@@ -1,0 +1,684 @@
+# WSL Worktree — 浏览器版 worktree 管理器
+
+浏览器里管理 WSL 内所有 git 仓库的 worktree。git 全程在 WSL 内执行，毫秒级；UI 是标准浏览器交互，不用学新快捷键。
+
+**打开：** http://localhost:7801
+
+---
+
+## 布局
+
+左中右三栏，都能自由调整：
+
+| 操作 | 方式 |
+|---|---|
+| 收起/展开左侧 | 顶栏左侧图标按钮，或快捷键 `[` |
+| 收起/展开右侧 | 顶栏右侧图标按钮，或快捷键 `]`，或详情面板右上角 `✕` |
+| 调整左侧宽度 | 拖动左侧分隔线；双击复位 220px；聚焦后用 `←` `→` 微调（`Shift` 加速） |
+| 调整右侧宽度 | 拖动右侧分隔线；双击复位 380px；同上键盘微调 |
+
+宽度和折叠状态都存 `localStorage`（key `wsl-worktree.layout.v1`），刷新后保持。
+
+### 记住当前仓库
+
+刷新、重开标签页都会回到上次看的仓库，而不是每次跳回第一个。
+
+**两处持久化，hash 优先**：
+
+| 来源 | 用途 |
+|---|---|
+| `location.hash` = `#repo=<urlencoded toplevel>` | 主来源。可以**直接分享/收藏某个仓库的直链** |
+| `localStorage` key `wsl-worktree.lastRepo` | 兜底。hash 被清掉时仍能恢复 |
+
+恢复顺序：hash 命中 → localStorage 命中 → 第一个可用仓库。
+
+**实现细节**：
+
+- 写 hash 用 `history.replaceState` 而不是 `location.hash = ...`。后者会把每次切仓库都压进浏览历史，用户点后退键会在一堆仓库之间来回跳。
+- hash 里的仓库不存在（仓库被删/改名）时，回退到可用仓库并把 hash 纠正为实际值。
+- localStorage 里存的值失效时，先按完整路径匹配，再尝试按仓库名唯一匹配，都不行才回退。
+- 监听 `hashchange`：手改地址栏 hash 或从收藏夹进入时也会切换。
+- 左侧列表、顶栏切换器、hashchange 三个入口最终都走 `selectRepo`，写入逻辑只在这一处，不会出现某个入口忘记记录。
+
+### 左栏收起后的仓库切换器
+
+左栏一收起，仓库列表这个唯一入口就没了。所以此时顶栏会出现一个仓库切换器（`#top-repo`），位置在 logo 右侧：
+
+- 显示当前仓库名 + worktree 数徽章（`+3`）/ 脏标记（`●`）
+- **聚焦即列出全部 33 个仓库**，并全选文本（直接输入就覆盖）
+- 支持模糊匹配，复用 `fuzzyScore`，和新建对话框同一套算法
+- 候选标签：顶层仓库只显示名字（`jm_java`），子目录仓库带目录前缀（`products/asset`）——否则同名分不清
+- `↓` `↑` 选择、`Enter` 切换、第一次 `Esc` 关面板、第二次 `Esc` 还原当前名
+- 失焦时若输入的不是有效仓库名，自动还原（避免留半截查询词）
+- 左栏重新展开后自动隐藏
+
+相关快捷键：`/` 在左栏收起时聚焦顶栏切换器（不再强行展开左栏）。
+
+**实现注意**：这个输入框预填的是「当前仓库名」而不是「查询词」，所以聚焦时不能拿它去过滤——否则只会看到自己那一项。为此给通用组件加了 `showAllOnFocus: true` 选项，聚焦时走 `open({ ignoreValue: true })`。
+
+**约束**：
+- 左栏 140–460px，右栏 240–900px
+- 中间区域永远保留至少 420px，拖到极限会停住而不是把中栏压没
+- 窗口变窄时宽度自动收敛，不会出现横向溢出
+- 窗口宽度 ≤1180px 时右侧面板自动变成浮层抽屉，点开 commit 时滑出
+
+**折叠的实现方式**（改代码时注意）：面板隐藏用的是 `display: none`，而 `display:none` 的 grid item **不占轨道**，后面的元素会往前顺移。所以 `.layout` 的 `grid-template-columns` 必须按折叠状态切换成 3 列 / 1 列，不能只把某一列设成 0：
+
+```css
+.layout            { grid-template-columns: var(--w-left) 5px 1fr 5px var(--w-right); }
+.layout.hide-left  { grid-template-columns: 1fr 5px var(--w-right); }
+.layout.hide-right { grid-template-columns: var(--w-left) 5px 1fr; }
+.layout.hide-left.hide-right { grid-template-columns: 1fr; }
+```
+
+---
+
+## 功能
+
+### 只读
+
+| 功能 | 说明 |
+|---|---|
+| 跨仓库总览 | 左侧列表，按目录分组，显示 worktree 数徽章与脏标记 |
+| worktree 表格 | 分支、路径、改动文件数、ahead/behind、主/锁定/待清理徽章 |
+| 打开位置 | 行内按钮：资源管理器、Windows Terminal |
+| 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
+| 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
+| 键盘 | `r` 刷新，`/` 聚焦仓库搜索（左栏收起时聚焦顶栏切换器），`[` `]` 开关左右面板 |
+
+### 写操作
+
+| 功能 | 入口 | 底层命令 |
+|---|---|---|
+| **更新仓库** | 工具栏「更新仓库」 | `git fetch --all --tags --prune --progress` || **更新分支** | 行内「拉取」 | `git pull --ff-only` 或 `--rebase` |
+| **切换分支** | 行内「切换」 | `git checkout <branch>` / `-b` / `--track` / `--detach refs/tags/<tag>` |
+| **创建 worktree** | 工具栏「新建 worktree」 | `git worktree add` 五种模式（含基于 tag） |
+| **删除 worktree** | 行内「删除」 | `git worktree remove [--force]` |
+| **批量清理** | 工具栏「清理陈旧」 | `git worktree remove --force` + `prune` |
+
+**未做**：cherry-pick、SSE 自动刷新、lock/unlock 的独立入口。
+
+---
+
+## fetch 的 tag 冲突处理
+
+这是一个实际踩到的坑，值得单独说明。
+
+### 现象
+
+点「更新仓库」报失败：
+
+```
+! [rejected] v5.5.12.9  -> v5.5.12.9  (would clobber existing tag)
+```
+
+### 真相
+
+远端把这个 tag 重新指向了别的提交，本地同名 tag 与之不同。git 默认拒绝覆盖，并且**让整个 fetch 退出码变成 1**。
+
+但这里最关键的一点是：**分支其实已经更新成功了**。退出码 1 只代表 tag 那部分被拒。最初我按退出码判定，于是界面显示"更新失败"，让用户以为一条都没拉下来——这比真正的失败更糟，因为它会让人放弃重新拉取。
+
+实测确认：
+
+```
+本地 v5.5.12.9 (annotated) → 66bbc0c1
+远端 v5.5.12.9             → 90e03c0b
+```
+
+### 现在的处理
+
+1. **按输出内容解析，而不是只看退出码**。用正则识别 `! [rejected] x -> x (would clobber existing tag)`，把它单独归类为 tag 冲突，不计入失败。
+2. **默认不覆盖本地 tag**。tag 被重打通常意味着发布流程出了问题；静默覆盖会让本地历史和远端悄悄分叉，已经基于旧 tag 构建的产物就对不上了。
+3. **界面明确告知"分支已更新"**，并列出每个冲突 tag 的本地 sha 与远端 sha，让人能判断谁对。
+4. **覆盖需要显式点红色按钮**，且按钮文案是「用远端覆盖」而不是「确定」，避免手滑。
+5. 新增 `tag-inspect` 接口，用 `git ls-remote` 拿远端指向，用于对话框展示。
+
+返回结构：
+
+```js
+{
+  ok: true,           // 分支层面成功
+  partial: true,      // 有 tag 未同步
+  updated: [...],     // 实际更新了哪些引用
+  tagConflicts: [{ tag: 'v5.5.12.9', reason: 'would clobber existing tag' }]
+}
+```
+
+要完全同步 tag，传 `forceTags: true`（等价于 `git fetch --force --tags`）。
+
+### 判定逻辑（容易写错的地方）
+
+```js
+// 不能这样：res.code !== 0 就判失败 —— tag 冲突时分支已更新
+const hardFail = res.code !== 0 && otherErrors.length > 0   // 有 error:/fatal: 行
+if (hardFail || (res.code !== 0 && tagConflicts.length === 0)) return { ok: false }
+```
+
+`otherErrors` 只统计以 `error:` / `fatal:` 开头的行，`! [rejected]` 不算——它后面跟的是 `(would clobber existing tag)` 这种说明，不是错误前缀。
+
+---
+
+## 切换分支：支持 tag
+
+「切换」对话框里可以切到分支，也可以切到 tag（进入 detached 状态）。
+
+### 三个入口
+
+| 方式 | 说明 |
+|---|---|
+| 列表里的 tag 分组 | 排在**最前面**（远程分支动辄一两百条，tag 放后面等于看不见）。每行显示 commit sha、`tag` / `轻量 tag` 徽章、相对时间 |
+| 顶部搜索框 | 用 `fuzzyScore` 同时过滤本地分支、远程分支、tag。比如输 `5.5.13` 能列出所有相关 tag |
+| 底部「或切到指定提交」 | 接入自动完成，可模糊搜索 tag / 本地分支，也支持直接粘贴 sha |
+
+选中 tag 时提示文字会明确写「将以 detached 状态检出」，因为 tag 不是一个分支，切过去之后新提交不属于任何分支。
+
+### 为什么不直接用 `git checkout <tag>`
+
+遇到**同名 tag 和分支**时，git 的消歧行为不稳定。`git checkout same-name` 在既有 `refs/heads/same-name` 又有 `refs/tags/same-name` 时会走哪边，取决于 git 版本和具体的引用解析顺序，可能报错也可能静默选一个。
+
+所以后端对 detachAt 做了显式判定：
+
+```js
+const asTag = await git(wtPath, ['rev-parse', '--verify', '--quiet', `refs/tags/${detachAt}`])
+if (asTag.code === 0) {
+  args = ['checkout', '--detach', `refs/tags/${detachAt}`]   // 写全引用，零歧义
+} else {
+  // 不是 tag：先确认引用存在，否则给可读报错
+  const exists = await git(wtPath, ['rev-parse', '--verify', '--quiet', detachAt])
+  if (exists.code !== 0) return { ok: false, reason: 'ref-not-found', ... }
+  args = ['checkout', '--detach', detachAt]
+}
+```
+
+实测验证：同时存在分支 `same-name`（指向 c1）和 tag `same-name`（指向 c2）时，传入 `same-name` 稳定切到 **c2**（tag），且处于 detached。
+
+### 引用不存在时的报错
+
+不再转述 git 的模糊提示，而是给明确信息：
+
+```
+找不到 tag / 分支 / 提交：v9.9.9（如果 tag 在远端新建，先点「更新仓库」）
+```
+
+---
+
+## 新建 worktree：自动完成与 tag 支持
+
+### 五种创建方式
+
+| 模式 | 说明 | 底层命令 |
+|---|---|---|
+| 新分支 | 从起点新建分支并检出 | `worktree add -b <br> <path> <base>` |
+| 现有分支 | 检出已存在的本地分支（不能已被占用） | `worktree add <path> <br>` |
+| 远程分支 | 自动去掉 `origin/` 建同名跟踪分支 | `worktree add --track -b <br> <path> <remote>` |
+| **基于 tag** | 默认 detached 检出；可勾选同时建分支 | `worktree add --detach <path> refs/tags/<t>` |
+| 指定提交 | 检出任意 commit / 分支 / tag | `worktree add --detach <path> <ref>` |
+
+### 自动完成
+
+分支名输入框、「起点」输入框、tag 模式的分支名输入框都接入了同一个自动完成组件（`attachAutocomplete`）。
+
+**支持的输入形式**：
+
+| 输入 | 命中 | 说明 |
+|---|---|---|
+| `hotfix` | `hotfix/h-tag-5.5.13.10-xxx` | 前缀 / 连续子串 |
+| `h5.5.13` | `hotfix/h-tag-5.5.13.10-xxx` | **跨段**：`h` 匹配 `hotfix`，`5.5.13` 匹配后面 |
+| `5.5.13` | 同上 | 纯版本号 |
+| `建模` | `...-建模Agents功能移植_1015` | 中文 |
+| `1016` | `...-问题修复1016` | 数字尾号 |
+| `rel` | `release/487399-...` | 缩写 |
+
+**键盘**：`↓` `↑` 移动（自动跳过被占用的分支）、`Enter` / `Tab` 选中、`Esc` 只关面板不关对话框。
+
+**排序**：完全相同 1000 分 → 前缀 900 → 连续子串 720/640 → 跨段 560 → 子序列 300。同级时短名优先（`v5.5.3.46` 排在 `tmp/v5.5.3.46-xxx` 前面）。
+
+### 模糊匹配的三个坑
+
+**坑 1：跨段输入最常见，但按段比对会失败**
+
+查 `h5.5.13` 时按 `/ - .` 切成 `['h5','5','13']`，但 `h5` 里的 `h` 属于 `hotfix` 段、`5` 属于 `5.5.13` 段。单纯按段比对直接返回 null。
+
+解法：片段整段匹配失败且长度 > 1 时，拆成「首字符」+「剩余」，首字符去匹配段首，剩余插回队列继续匹配：
+
+```js
+if (found < 0 && part.length > 1) {
+  const head = part[0]
+  for (let i = si; i < segs.length; i++) {
+    if (segs[i].startsWith(head)) {
+      found = i
+      if (part.slice(1)) qParts.splice(pi + 1, 0, part.slice(1))  // 剩余部分插回
+      break
+    }
+  }
+}
+```
+
+**坑 2：纯子序列兜底会引入大量噪声**
+
+`tmp` 三个字符能在 `release/487399-jmpt_java-jmpt_java-R` 里按序找到（`j-m-p-t`… 顺序是 t→m→p），于是两个 release 分支也被列出来。实测这一条就产生了 2 条无关项。
+
+解法：子序列只对长度 ≥ 3 的查询启用，且要求 `gaps <= query.length * 6`（字符必须相当紧凑地出现）。
+
+**坑 3：被占用的分支不能选**
+
+已被其它 worktree 检出的分支，创建/切换都会失败。所以在候选里标「占用」并设为 `disabled`，方向键移动时用「可选项索引表」跳过它们：
+
+```js
+const idxs = items.map((x, i) => (x.disabled ? -1 : i)).filter((i) => i >= 0)
+const cur = idxs.indexOf(active)
+const next = cur < 0 ? (delta > 0 ? 0 : idxs.length - 1) : (cur + delta + idxs.length) % idxs.length
+active = idxs[next]
+```
+
+### 基于 tag 创建
+
+后端 `mode: 'tag'` 的两种形态：
+
+```js
+// 只检出（默认）—— 看历史、复现某个版本的问题
+{ path, mode: 'tag', base: 'v5.5.13.10', branch: '' }
+// → git worktree add --detach <path> refs/tags/v5.5.13.10
+
+// 同时建分支 —— 要在该版本基础上改代码（发 hotfix）
+{ path, mode: 'tag', base: 'v5.5.13.10', branch: 'hotfix/from-5.5.13.10' }
+// → git worktree add -b <branch> <path> refs/tags/v5.5.13.10
+```
+
+前置校验：
+
+- tag 不存在 → 409 `tag-not-found`，提示「先更新仓库」
+- 分支重名 → 409 `branch-exists`
+- 分支被占用 → 409 `branch-in-use`
+
+`/api/repos/:id/branches` 现在同时返回 `tags`，用 `%(*objectname)` 拿 annotated tag 剥离后的 commit：
+
+```bash
+git for-each-ref --format='%(refname)%00%(objectname:short)%00%(*objectname:short)%00%(creatordate:unix)' refs/tags
+```
+
+轻量 tag 的 `%(*objectname)` 为空，回退用 `%(objectname)`；有值说明是 annotated tag，界面标 `annotated`。
+
+---
+
+## 写操作的安全设计
+
+这个工具定位是"轻量"，但删除不可逆。所有写操作遵循同一套规则。
+
+### 1. 删除前置预检，把风险讲清楚
+
+点「删除」不会直接删。先调 `worktree-preflight`，返回四档风险：
+
+| risk | 含义 | 行为 |
+|---|---|---|
+| `clean` | 工作区干净，HEAD 上无独有 commit | 直接可删，分支保留 |
+| `has-dirty` | 有未提交改动 | 列出全部改动文件，必须勾选确认框才能删 |
+| `has-unpushed` | HEAD 有提交不在任何 `refs/heads`、`refs/remotes`、`refs/tags` 上 | **不提供删除**。即使传 `force:true` 也拒绝 |
+| `locked` | 已锁定 | 提示先解锁 |
+
+`has-unpushed` 的判定方式（实测有效）：
+
+```bash
+# 列出 HEAD 上所有不在其它引用上的提交
+git -C <wt> log HEAD --not <除自身分支外的所有 refs> --format=%h%x1f%s
+```
+
+这是唯一能准确回答"删了会不会丢提交"的办法。`@{u}` 只能看上游，分支没设 upstream 就失效。
+
+### 2. 路径与分支校验
+
+- 创建时拒绝相对路径、拒绝在仓库目录内部创建
+- 目标路径已存在则拒绝，并报告里面有几项内容
+- 分支被其它 worktree 占用时拒绝，并指出是哪个 worktree
+
+### 3. 绝不自动加 `--force`
+
+`force` 只能由前端在用户显式确认后传。后端不猜测意图。
+
+### 4. 杜绝 git 交互式挂起
+
+`lib/git.mjs` 固定注入这些环境变量，防止 `pull --no-rebase` 之类操作弹出编辑器卡住进程：
+
+```
+GIT_EDITOR=true  GIT_PAGER=cat  GIT_ASKPASS=true  GIT_MERGE_AUTOEDIT=no
+GIT_TERMINAL_PROMPT=0
+```
+
+---
+
+## 批量清理的判定口径（重要）
+
+「陈旧」没按常见的"多久没动"来做，因为那个口径在你的环境里是失效的：
+
+> worktree 里文件的 mtime 在 `worktree add` 的瞬间就是"现在"。
+> 所以**刚创建但从未使用的 worktree 看上去比一个三个月没碰的老 worktree 更"新"**。
+
+真正的过滤条件是**「删了会不会丢东西」**，与时间无关：
+
+```
+可清理 = 非主工作树
+       AND 未锁定
+       AND 工作区干净（无未提交改动）
+       AND HEAD 上的提交都已被某个 ref 覆盖
+```
+
+满足这四条时，删除不丢任何代码 —— 分支还在，提交还在。
+
+时间只用于**标记和排序**：
+
+- `idleDays` = 该分支最后一次提交距今多少天（不是文件 mtime）
+- 超过阈值的打「建议清理」标签并**默认勾选**
+- 未超期的打「可清理」但不默认勾选
+
+界面上分两处呈现：候选列表（可删）+ 折叠的「未列为候选」列表（附排除原因）。
+
+实测你的真实仓库：
+
+```
+jm_java  候选 1 个
+           hotfix/...-主项问题修复1016        闲置=3天   suggest=false
+         排除 2 个
+           hotfix/...-建模Agents功能移植_1015  8 个提交未被任何分支/远程覆盖
+           tmp/v5.5.3.46-...               有 1 个未提交改动
+
+jm_net   候选 2 个（都是 detached，闲置 32 天 / 9 天，均 suggest=true）
+```
+
+---
+
+## 查看指定 worktree 的提交日志
+
+有三种方式，效果等价：
+
+1. **顶部下拉框** `提交日志` 左边 —— 列出该仓库全部 worktree（带 `· 主` 标记和 `· N改` 脏文件数）
+2. **双击 worktree 表格里的任意一行** —— 直接把日志切到那个 worktree，该行左侧出现蓝色竖条
+3. **URL 参数**：`GET /api/repos/:id/log?rev=HEAD&wt=<worktree 绝对路径>`
+
+右上角的灰色小字会显示当前的 git 工作目录（`~/codes/jm_java-worktrees/xxx`），用来确认看的是哪个。
+
+### 两种视图语义的区别
+
+| 视图 | 含义 |
+|---|---|
+| **当前分支**（`rev=HEAD`）| 该 worktree 自己的 HEAD 历史。**各 worktree 结果不同** —— 这是"看指定 worktree 日志"的正确姿势 |
+| **全部分支**（`rev=--all`）| 跨所有引用的完整历史。**各 worktree 结果相同**，因为 `--all` 遍历的是共享的 `refs/`，与 cwd 无关 |
+
+选「全部分支」时切 worktree 不会有变化，这不是 bug —— worktree 之间共享同一个对象库和 refs，只有 HEAD、索引、工作区是各自的。
+
+### 为什么必须切 cwd
+
+`git log HEAD` 中的 `HEAD` 属于**单个 worktree**（`.git/worktrees/<name>/HEAD`）。在主仓库目录下执行，永远只能拿到主工作树的 HEAD。要看待某个 worktree 的 HEAD，必须把 git 的 cwd 设成那个目录：
+
+```bash
+git -C /home/wangy/codes/jm_java-worktrees/xxx log HEAD
+```
+
+后端 `/api/repos/:id/log` 的 `wt` 参数做的就是这件事。传参会先经 `resolveWorktree()` 校验必须是该仓库已注册的 worktree，`wt=/etc` 之类返回 400。
+
+### 验证结果
+
+`test-log-per-wt.mjs`（接口级）实测 jm_java 的 4 个 worktree：
+
+```
+[主] tmp/v5.5.10.55-...        log首条=f262fa06  worktree.head=f262fa06  PASS
+     hotfix/...-主项问题修复1016   log首条=e73da026  worktree.head=e73da026  PASS
+     hotfix/...-建模Agents移植     log首条=32c13970  worktree.head=32c13970  PASS
+     tmp/v5.5.3.46-...          log首条=b5866c56  worktree.head=b5866c56  PASS
+
+首条 commit 去重后 4 个 / 共 4 个 worktree   → 隔离生效
+--all 在两个 worktree 下结果相同: PASS      → 符合预期
+wt=/etc → 400 unknown worktree              → 拒绝越权
+```
+
+---
+
+## 实测性能
+
+| 操作 | 耗时 |
+|---|---|
+| 扫描 33 个仓库（全部 `worktree list`）| **141 ms** |
+| 单仓库 4 个 worktree 含 status | **84 ms** |
+| `log -n 200`（jm_java，大仓库）| **6 ms** |
+| commit 文件清单（43 个文件）| **11 ms** |
+| 单文件 diff | **5–8 ms** |
+| 进程常驻内存 | 17 MB |
+
+对比：Fork + wslgit 桥接一次刷新 5.8 秒。
+
+---
+
+## 文件结构
+
+```
+E:\ai-spaces\tools\wsl-worktree\
+├── server.mjs              HTTP 服务 + 路由
+├── config.json             配置（端口、扫描根目录、缓存 TTL）
+├── deploy.sh               同步到 WSL 并重启服务
+├── wsl-worktree.service    systemd user unit
+├── lib\
+│   ├── git.mjs             spawn 封装 + 并发限流 + 防交互挂起
+│   ├── scan.mjs            仓库扫描 + porcelain 解析
+│   ├── numstat.mjs         numstat -z 解析（含重命名）
+│   ├── ops.mjs             全部写操作（fetch/pull/checkout/create/remove/stale）
+│   └── config.mjs          配置加载
+└── public\
+    ├── index.html          单页骨架
+    ├── style.css           浅色主题（跟随 IDE light）
+    └── app.js              全部交互逻辑 + 对话框，零框架
+```
+
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
+
+**源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
+改完源码执行：
+
+```bash
+wsl -e bash /mnt/e/ai-spaces/tools/wsl-worktree/deploy.sh
+```
+
+`deploy.sh` 会逐个文件比对 md5 —— `/mnt/e` 上 `cp -f` 偶发静默失败，这条校验是必须的。
+
+---
+
+## 配置
+
+`config.json`：
+
+```json
+{
+  "port": 7801,
+  "host": "0.0.0.0",
+  "roots": ["/home/wangy/codes"],
+  "scanMaxDepth": 4,
+  "stateCacheMs": 8000,
+  "scanCacheMs": 30000,
+  "maxPatchBytes": 2097152,
+  "windows": {
+    "explorer": "/mnt/c/Windows/explorer.exe",
+    "wt": "/mnt/c/Users/wangy/AppData/Local/Microsoft/WindowsApps/wt.exe"
+  }
+}
+```
+
+- `roots`：扫描根目录，可加多个
+- `scanMaxDepth`：递归深度。当前 `~/codes` 最深的仓库是 `products/asset`（4 层）
+- `host: 0.0.0.0`：Mirrored 网络下 Windows 侧可直接访问
+
+改完配置也要执行 `deploy.sh`（重启才生效）。
+
+---
+
+## API
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/config` | 当前配置 |
+| `GET /api/repos[?force=1]` | 仓库列表 + worktree 计数 |
+| `GET /api/repos/:id/worktrees[?force=1]` | worktree 详情（含 status） |
+| `GET /api/repos/:id/log?rev=&skip=&count=&wt=` | 提交日志，`wt` 指定在哪个 worktree 里执行 |
+| `GET /api/repos/:id/commit/:sha` | commit 的文件清单 |
+| `GET /api/repos/:id/diff?sha=&path=&mode=` | 单文件 patch |
+| `GET /api/repos/:id/branches` | 本地 + 远程分支 + tag（含被哪个 worktree 占用） |
+| `POST /api/open` | `{target:'explorer'\|'wt', path}` 打开 Windows 程序 |
+
+写操作（全部 `POST`，路径前缀 `/api/repos/:id/`）：
+
+| 端点 | body | 说明 |
+|---|---|---|
+| `fetch` | `{prune?:bool, forceTags?:bool}` | 更新仓库所有远程；`forceTags` 才会覆盖被重打的 tag |
+| `tag-inspect` | `{tag}` | 查某 tag 的本地/远端 sha（冲突时用于展示）|
+| `pull` | `{wt, mode:'ff-only'\|'rebase'\|'merge'}` | 更新某个 worktree 的分支 |
+| `checkout` | `{wt, branch?, detachAt?, create?, startPoint?}` | 切换分支；`detachAt` 可传 tag 名（后端写成 `refs/tags/<tag>` 消除歧义）/ 分支名 / sha |
+| `worktrees` | `{path, branch, mode:'new'\|'existing'\|'remote'\|'tag'\|'detach', base?, lock?}` | 创建；`mode:'tag'` 时 `base` 为 tag 名，`branch` 非空则同时建分支 |
+| `worktree-preflight` | `{path}` | 删除前预检（只读） |
+| `worktree-remove` | `{path, force?}` | 删除 |
+| `stale-scan` | `{staleDays?}` | 扫描可清理项 |
+| `stale-clean` | `{paths?, staleDays?, dryRun?}` | 批量清理 |
+
+写操作返回 `200`（成功）或 `409`（业务拒绝），body 里 `reason` 字段给出具体原因（`branch-in-use` / `path-exists` / `needs-force` / `has-unpushed` / `diverged` / `no-upstream` / `conflict` / `is-main` 等），前端据此渲染中文提示。
+
+`:id` 是 toplevel 路径的 base64url —— 路径含中文/空格，不能用原始字符串做 URL 段。
+
+---
+
+## 服务管理
+
+```bash
+wsl -e systemctl --user status wsl-worktree    # 状态
+wsl -e systemctl --user restart wsl-worktree   # 重启
+wsl -e systemctl --user stop wsl-worktree      # 停止
+wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
+```
+
+已 enable，WSL 启动即自动运行。
+
+---
+
+## 实现中踩到的坑（都已修复，改代码时注意）
+
+1. **两级限流不能共用一个 limiter**
+   `/api/repos` 外层持槽等内层 status，共用一个实例会死锁 —— 表现为请求永久挂起。必须 `repoLimit` / `statLimit` 分开。
+
+2. **`git log -n=200` 是错的**
+   长选项带等号只对 `--skip=` 这类有效，`-n` 必须 `-n 200` 分开传，否则 `fatal: '=5': not an integer`。
+
+3. **`git show <merge-commit>` 默认不出 patch**
+   查看 merge commit 的改动必须取 first-parent 语义：`git diff <p1> <sha>`。root commit 反过来要用 `git show`。`getCommitStat` / `getFileDiff` 现在都先取 parents 再分支处理。
+
+4. **`worktree list --porcelain -z` 不是空行分块**
+   `-z` 下是 `\0` 分隔的 token 流（`worktree /path\0HEAD sha\0branch refs/..\0\0`），解析逻辑与默认格式完全不同。`prunable <reason>` 和 `locked <reason>` 都带后半段。
+
+5. **`numstat -z` 的重命名是两个额外 token**
+   `0\t0\t\0oldpath\0newpath\0`。不能用非 `-z` 的 `{old => new}` 格式。
+
+6. **`table-layout: fixed` 配 `max-width:1px` 会重叠**
+   标准的 `max-width:1px` 省略号技巧只在 auto 布局下成立。fixed 布局改成 `td { overflow:hidden; text-overflow:ellipsis }`。
+
+7. **`td` 需要显式 `overflow: hidden`**
+   fixed 布局下 `td` 内容超宽会溢出到相邻列，视觉上是文字重叠。
+
+8. **`%(refname:short)` 会产生伪分支 `heads/`、`origin/`**
+   当分支名本身形如 `heads/xxx` 或远程名恰好构成前缀时，`:short` 的消歧输出无法与去前缀结果区分。必须用完整 `%(refname)` 再手工剥 `refs/heads/` / `refs/remotes/` 前缀。
+
+9. **`%(HEAD)` 为空时 git 输出 `\0 ` （NUL + 空格）**
+   用 `\0` 做字段分隔符时，最后一段不是空串而是 `" "`。每段都要 `.trim()`，否则 `isEmpty` 判断和后续字段都会错位 —— 表现为某些分支 mysteriously 消失。
+
+10. **`%1f` 不是可靠的格式分隔符**
+    旧版 git 不识别 `%1f`，会原样输出字面量 `%1f`，把整行糊成一列。用 `%00`。
+
+11. **GET 路由必须先判 method**
+    `/worktrees` 同时是 GET（列表）和 POST（创建）。路由只匹配路径不判 method 时，POST 会被 GET 分支吞掉，返回 200 + 列表数据，前端看起来"创建成功了但没创建"。
+
+12. **用文件 mtime 判断 worktree 活跃度是错的**
+    `worktree add` 的瞬间所有文件 mtime 都是"现在"，刚创建的空 worktree 比三个月没动的老 worktree 更"新"。活跃度要用分支 HEAD 提交时间。
+
+---
+
+## 边界情况处理
+
+| 场景 | 表现 |
+|---|---|
+| detached HEAD | 分支列显示 `(detached @ abc1234)`；拉取按钮禁用 |
+| bare 仓库 | 状态列显示 `bare` 徽章 |
+| 手删了 worktree 目录 | 状态列显示 `待清理`；清理对话框中标为「残留」 |
+| 锁定 | 状态列显示 `锁定`，hover 显示原因；不可删 |
+| status 读取失败 | 改动列显示 `?`，不中断整表 |
+| 路径含空格/中文 | 全程 `-z` 解析 + spawn 数组传参 |
+| 窄屏（<1180px）| 详情面板变右侧抽屉，点 commit 自动滑出；表格横向滚动 |
+| 分支被占用 | 切换/创建时明确报错并指出占用它的 worktree |
+| 分支无 upstream | 拉取时提示 `no-upstream`，不静默失败 |
+| 本地远程已分叉 | `--ff-only` 报 `diverged`，可改用变基 |
+| 认证失败 | 提示"在终端里执行一次 fetch 以缓存凭据" |
+| 远端重打了 tag | **不算失败**：分支照常更新，对话框列出冲突 tag 的本地/远端 sha，默认保留本地 |
+| tag 与分支同名 | 切换/创建时优先当 tag 处理（写全 `refs/tags/<tag>`），行为确定 |
+| 切到 tag / commit | 处于 detached 状态，界面明确提示；新建或创建 worktree 也支持 |
+| 有未推送提交的 worktree | 拒绝删除，列出那些 commit |
+| 左栏收起 | 顶栏出现仓库切换器（带模糊搜索），不丢失换仓库的入口 |
+| 同名仓库在不同目录 | 顶栏候选显示目录前缀（`products/asset`）区分 |
+| 刷新页面 | 回到上次选中的仓库（hash 优先，localStorage 兜底），不再跳回第一个 |
+| 上次的仓库被删除 | 自动回退到可用仓库，并把 URL hash 纠正为实际值 |
+| 用带 `#repo=` 的链接打开 | 直接定位到该仓库，可用于收藏/分享 |
+
+---
+
+## 测试
+
+```bash
+# 接口级：在 /tmp 造临时仓库，验证全部写操作与安全闸门（35 项）
+wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-ops.mjs . && node test-ops.mjs'
+
+# 接口级：验证 per-worktree 日志隔离
+node test-log-per-wt.mjs
+
+# UI 只读：CDP 驱动 Edge 真实点击（21 项）
+node test-ui.mjs
+
+# UI 写操作对话框（25 项）
+node test-ui-ops.mjs
+
+# UI 布局：折叠 / 拖拽 / 约束 / 持久化（20 项，含真实鼠标拖拽事件）
+node test-layout.mjs
+
+# 接口级：fetch 的 tag 冲突处理（16 项）
+wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-fetch-tag.mjs . && node test-fetch-tag.mjs'
+
+# UI：tag 冲突对话框（10 项）
+node test-ui-fetch-tag.mjs
+
+# 模糊匹配算法（20 项，纯函数，秒级）
+node test-fuzzy.mjs
+
+# 接口级：基于 tag 创建 worktree（19 项）
+wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-tag-create.mjs . && node test-tag-create.mjs'
+
+# UI：自动完成 / 模糊匹配 / tag 模式（27 项）
+node test-ui-autocomplete.mjs
+
+# UI：顶栏仓库切换器（22 项）
+node test-ui-toprepo.mjs
+
+# 接口级：checkout 到 tag（17 项，含同名 tag/分支歧义）
+wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-checkout-tag.mjs . && node test-checkout-tag.mjs'
+
+# UI：切换分支对话框的 tag 支持（17 项）
+node test-ui-checkout-tag.mjs
+
+# UI：刷新后恢复上次选中的仓库（22 项）
+node test-ui-persist-repo.mjs
+```
+
+`test-ops.mjs` 必须在 WSL 里跑（它用 `/tmp` 绝对路径造仓库，Windows 侧 node 会把路径转成 `\tmp\...`）。
+
+`test-layout.mjs` 用 `Input.dispatchMouseEvent` 发真实拖拽、用 `Input.dispatchKeyEvent` 发真实按键 —— 因为把 `KeyboardEvent` dispatch 到 `document` 时 `e.target` 是 document 而非元素，测不出真实行为。
+
+---
+
+## 下一步
+
+- **cherry-pick**：跨 worktree 摘提交 + 冲突三按钮处置
+- **SSE 自动刷新**：文件变动推送，替代手动 `r`
+- **lock / unlock 独立入口**（后端 `worktree lock` 已可用，缺 UI）
+- **深色模式**
+- **`j/k` 键盘导航**
+
+试的时候重点看：**对话框的措辞够不够清楚、清理判定符不符合直觉、还缺什么**。

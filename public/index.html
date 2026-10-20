@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WSL Worktree</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="4" cy="3" r="1.6" fill="currentColor"/><circle cx="4" cy="13" r="1.6" fill="currentColor"/>
+      <circle cx="12" cy="6" r="1.6" fill="currentColor"/>
+      <path d="M4 4.6v6.8M4 8.5c0-2 1.5-2.5 3-2.5h3.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
+    </svg>
+    <span>WSL Worktree</span>
+  </div>
+  <div class="roots" id="roots"></div>
+  <!-- 左侧面板收起时才显示的仓库切换器（带搜索） -->
+  <div class="top-repo" id="top-repo" hidden>
+    <input class="top-repo-input" id="top-repo-input" placeholder="切换仓库…" autocomplete="off" spellcheck="false">
+    <span class="top-repo-badge" id="top-repo-badge"></span>
+  </div>
+  <div class="spacer"></div>
+  <div class="stats" id="stats"></div>
+  <div class="top-sep"></div>
+  <div class="panel-toggles" role="group" aria-label="面板显示">
+    <button class="top-toggle" id="toggle-left" title="显示/隐藏仓库列表  ([)" aria-label="切换左侧面板" aria-pressed="true">
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        <rect x="1.2" y="2.2" width="11.6" height="9.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <rect x="1.6" y="2.6" width="3.6" height="8.8" rx="1" fill="currentColor" opacity="0.32"/>
+      </svg>
+    </button>
+    <button class="top-toggle" id="toggle-right" title="显示/隐藏详情面板  (])" aria-label="切换右侧面板" aria-pressed="true">
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+        <rect x="1.2" y="2.2" width="11.6" height="9.6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.2"/>
+        <rect x="8.8" y="2.6" width="3.6" height="8.8" rx="1" fill="currentColor" opacity="0.32"/>
+      </svg>
+    </button>
+  </div>
+  <button class="btn" id="btn-refresh" title="重新扫描全部仓库 (r)">刷新</button>
+</header>
+
+<main class="layout" id="layout">
+  <aside class="pane pane-repos" id="pane-left">
+    <div class="pane-head">
+      <input class="search" id="repo-search" placeholder="过滤仓库…" spellcheck="false">
+      <span class="count" id="repo-count"></span>
+    </div>
+    <div class="list" id="repo-list"></div>
+  </aside>
+
+  <div class="splitter" id="split-left" role="separator" aria-label="调整左侧面板宽度" title="拖动调整宽度，双击复位"></div>
+
+  <section class="pane pane-main">
+    <div class="pane-head">
+      <strong id="main-title">选择一个仓库</strong>
+      <span class="hint" id="main-meta"></span>
+      <div class="spacer"></div>
+      <button class="btn sm" id="btn-fetch" title="git fetch --all --prune">更新仓库</button>
+      <button class="btn sm" id="btn-new-wt" title="创建 worktree">新建 worktree</button>
+      <button class="btn sm" id="btn-stale" title="扫描并清理陈旧 worktree">清理陈旧</button>
+    </div>
+    <div class="scroll" id="wt-scroll">
+      <table class="tbl fixed" id="wt-table">
+        <thead>
+          <tr>
+            <th style="width:16px"></th>
+            <th style="width:26%">分支</th>
+            <th>路径</th>
+            <th class="num" style="width:70px">改动</th>
+            <th class="num" style="width:78px">a/b</th>
+            <th style="width:82px">状态</th>
+            <th style="width:238px"></th>
+          </tr>
+        </thead>
+        <tbody id="wt-body"></tbody>
+      </table>
+      <div class="empty" id="wt-empty" hidden>选择一个仓库查看 worktree</div>
+    </div>
+
+    <div class="pane-head sub">
+      <strong>提交日志</strong>
+      <select id="wt-select" class="select" title="选择在哪个 worktree 里查看日志"></select>
+      <select id="rev-select" class="select">
+        <option value="HEAD">当前分支</option>
+        <option value="--all">全部分支</option>
+      </select>
+      <span class="hint" id="log-meta"></span>
+      <div class="spacer"></div>
+      <input class="search narrow" id="log-filter" placeholder="过滤 message / sha / 作者…" spellcheck="false">
+      <button class="btn sm" id="btn-more" hidden>加载更多</button>
+    </div>
+    <div class="scroll log-scroll" id="log-scroll">
+      <table class="tbl fixed" id="log-table">
+        <thead>
+          <tr>
+            <th style="width:70px">sha</th>
+            <th style="width:92px">时间</th>
+            <th style="width:88px">作者</th>
+            <th>摘要</th>
+          </tr>
+        </thead>
+        <tbody id="log-body"></tbody>
+      </table>
+      <div class="empty" id="log-empty" hidden>暂无提交</div>
+    </div>
+  </section>
+
+  <div class="splitter" id="split-right" role="separator" aria-label="调整右侧面板宽度" title="拖动调整宽度，双击复位"></div>
+
+  <section class="pane pane-detail" id="detail">
+    <div class="pane-head">
+      <strong id="detail-title">详情</strong>
+      <div class="spacer"></div>
+      <span class="hint" id="detail-meta"></span>
+      <button class="icon-btn detail-close" id="detail-close" title="隐藏详情面板 (])">✕</button>
+    </div>
+    <div class="scroll" id="detail-body">
+      <div class="empty">点击一个提交查看改动文件</div>
+    </div>
+  </section>
+</main>
+
+<div class="resize-hint" id="resize-hint" hidden></div>
+
+<div class="toast" id="toast" hidden></div>
+
+<!-- 通用对话框 -->
+<div class="modal-backdrop" id="modal" hidden>
+  <div class="modal" id="modal-box" role="dialog" aria-modal="true">
+    <div class="modal-head">
+      <strong id="modal-title">标题</strong>
+      <button class="icon-btn" id="modal-close" title="关闭 (Esc)">✕</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<script type="module" src="/app.js"></script>
+</body>
+</html>

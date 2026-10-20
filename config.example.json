@@ -1,0 +1,14 @@
+{
+  "port": 7801,
+  "host": "0.0.0.0",
+  "roots": ["/home/<你的用户名>/codes"],
+  "scanMaxDepth": 4,
+  "worktreeDirSuffix": "-{branch}",
+  "stateCacheMs": 8000,
+  "scanCacheMs": 30000,
+  "maxPatchBytes": 2097152,
+  "windows": {
+    "explorer": "/mnt/c/Windows/explorer.exe",
+    "wt": "/mnt/c/Users/<你的 Windows 用户名>/AppData/Local/Microsoft/WindowsApps/wt.exe"
+  }
+}

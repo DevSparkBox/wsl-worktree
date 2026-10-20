@@ -1,0 +1,22 @@
+# 测试截图产物（每次跑 UI 测试都会重新生成，4.9MB，不入库）
+shots/
+
+# 依赖
+node_modules/
+
+# 运行期数据
+*.log
+*.pid
+.DS_Store
+Thumbs.db
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+
+# 临时调试脚本（我会用 .xxx.mjs 命名做一次性排查，不提交）
+.?.mjs
+
+# 本机配置（含绝对路径，克隆后请从 config.example.json 复制）
+config.json
