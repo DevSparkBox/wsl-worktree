@@ -1,0 +1,367 @@
+/* ============================================================
+   文件历史独立页面
+   沿用主界面的变量与配色，只是把「列表 + diff」做成左右双栏。
+   ============================================================ */
+
+.history-page {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+/* ---------- 顶栏 ---------- */
+.h-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  height: 38px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.h-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  flex: none;
+}
+.h-repo {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  padding: 1px 6px;
+  background: var(--bg-alt);
+  border-radius: 4px;
+  flex: none;
+}
+.h-path-wrap {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+}
+.h-path {
+  display: block;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.spacer { flex: 1; }
+
+.h-follow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  flex: none;
+  user-select: none;
+}
+.h-follow input { margin: 0; cursor: pointer; }
+.h-wt {
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--bg-alt);
+  padding: 1px 6px;
+  border-radius: 4px;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* ---------- 双栏 ---------- */
+.h-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  --w-list: 420px;
+}
+.h-list-pane {
+  flex: none;
+  width: var(--w-list);
+  min-width: 260px;
+  max-width: 70vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  min-height: 0;
+}
+.h-list-head {
+  flex: none;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.h-filter {
+  width: 100%;
+  box-sizing: border-box;
+  font: 11.5px var(--sans);
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.h-filter:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.h-list-wrap {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.h-list { display: flex; flex-direction: column; }
+
+/* 列表条目：仿 fork 的「头像 + 两行信息」 */
+.h-row {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  align-items: start;
+}
+.h-row:hover { background: var(--bg-hover); }
+.h-row.active { background: var(--accent-soft); }
+
+.h-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 10px var(--sans);
+  color: #fff;
+  margin-top: 1px;
+  flex: none;
+  user-select: none;
+}
+.h-body { min-width: 0; }
+.h-line1 {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  min-width: 0;
+}
+.h-author {
+  font-weight: 600;
+  color: var(--text);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+}
+.h-date { flex: none; font-variant-numeric: tabular-nums; }
+.h-sha {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  flex: none;
+  margin-left: auto;
+}
+.h-subject {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+}
+.h-fileline {
+  margin-top: 3px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 10.5px var(--mono);
+  color: var(--text-faint);
+  min-width: 0;
+}
+.h-fileline .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  min-width: 0;
+}
+.h-pill {
+  flex: none;
+  font: 9.5px var(--sans);
+  padding: 0 4px;
+  border-radius: 3px;
+  line-height: 15px;
+}
+.h-pill.rename { background: var(--amber-soft); color: var(--amber); }
+.h-pill.add { background: var(--green-soft); color: var(--green); }
+.h-pill.del { background: var(--red-soft); color: var(--red); }
+.h-pill.merge { background: var(--purple-soft); color: var(--purple); }
+.h-stat { flex: none; font-family: var(--mono); }
+.h-stat .plus { color: var(--green); }
+.h-stat .minus { color: var(--red); }
+
+.h-empty {
+  padding: 20px 14px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+/* ---------- 拖动分隔线 ---------- */
+.h-splitter {
+  flex: none;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+}
+.h-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+  transition: background 120ms;
+}
+.h-splitter:hover::after,
+.h-splitter.dragging::after { background: var(--accent); }
+
+/* ---------- 右侧 diff ---------- */
+.h-diff-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.h-diff-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+  min-width: 0;
+}
+.h-diff-sha {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: none;
+}
+.h-diff-subject {
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.h-diff-stat { font: 10.5px var(--mono); flex: none; }
+.h-btn {
+  flex: none;
+  font: 11px var(--sans);
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.h-btn:hover { background: var(--bg-hover); color: var(--text); }
+.h-btn:disabled { opacity: .5; cursor: default; }
+
+.h-diff-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+.h-diff-body .empty {
+  padding: 24px 16px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+/* diff 用带行号的表格呈现（fork 风格），比纯 pre 更容易对齐 */
+.h-patch-table {
+  width: 100%;
+  border-collapse: collapse;
+  font: 11.5px/1.6 var(--mono);
+  tab-size: 4;
+}
+.h-patch-table td {
+  padding: 0 10px;
+  vertical-align: top;
+  white-space: pre;
+}
+.h-patch-table td.ln {
+  width: 1%;
+  text-align: right;
+  color: var(--text-faint);
+  background: var(--bg-alt);
+  padding: 0 6px;
+  user-select: none;
+  font-size: 10.5px;
+  border-right: 1px solid var(--border);
+}
+.h-patch-table tr.add td.code { background: var(--add-bg); color: var(--add-text); }
+.h-patch-table tr.del td.code { background: var(--del-bg); color: var(--del-text); }
+.h-patch-table tr.ctx td.code { color: var(--text-dim); }
+.h-patch-table tr.hunk td {
+  background: var(--purple-soft);
+  color: var(--purple);
+  padding: 1px 10px;
+}
+.h-patch-table tr.meta td {
+  background: var(--bg-alt);
+  color: var(--text-faint);
+}
+
+/* ---------- toast ---------- */
+.h-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 22px;
+  transform: translateX(-50%);
+  background: #1f2328;
+  color: #fff;
+  font-size: 11.5px;
+  padding: 6px 14px;
+  border-radius: 5px;
+  z-index: 100;
+  box-shadow: 0 6px 18px rgba(0,0,0,.2);
+}
+.h-toast[hidden] { display: none; }
+
+/* 改名行：显示「差异片段 → 差异片段」。
+   主 .name 用了 direction:rtl（为从右侧截断长路径），
+   这里必须改回 ltr，否则箭头两端会颠倒。 */
+.h-fileline .name.rename-label {
+  direction: ltr;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

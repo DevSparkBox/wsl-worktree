@@ -1083,3 +1083,33 @@ body.resizing * { cursor: col-resize !important; }
 /* tag 行：不用等宽高亮色，避免和分支混淆 */
 .branch-row.is-tag .mono { color: var(--text-dim); }
 .branch-row.is-tag.sel .mono { color: var(--text); }
+
+/* ---------- 文件行的「历史」按钮：hover 才显形 ---------- */
+.file-row { position: relative; }
+.file-hist-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  /* 默认不可见但仍占位，避免 hover 时行内元素跳动 */
+  opacity: 0;
+  transition: opacity 100ms, background 100ms, color 100ms;
+}
+.file-row:hover .file-hist-btn { opacity: 1; }
+.file-hist-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.file-hist-btn:focus-visible {
+  opacity: 1;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}

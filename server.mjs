@@ -8,6 +8,7 @@ import { git, createLimiter } from './lib/git.mjs'
 import { scanRepos, parseWorktreePorcelainZ, parseStatusV2, suggestWorktreePath } from './lib/scan.mjs'
 import { parseNumstatZ } from './lib/numstat.mjs'
 import * as ops from './lib/ops.mjs'
+import { getFileHistory, getHistoryDiff, listFiles } from './lib/history.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
@@ -288,6 +289,53 @@ const server = createServer(async (req, res) => {
       const path = url.searchParams.get('path') || ''
       const mode = url.searchParams.get('mode') || 'commit'
       const data = await getFileDiff(toplevel, sha, path, mode)
+      return json(res, 200, data)
+    }
+
+    // ---------- 单文件历史 ----------
+    const mHist = p.match(/^\/api\/repos\/([^/]+)\/file-history$/)
+    if (mHist) {
+      const toplevel = dec(mHist[1])
+      const filePath = url.searchParams.get('path') || ''
+      if (!filePath) return json(res, 400, { error: 'path required', commits: [] })
+      const follow = url.searchParams.get('follow') !== '0'
+      const rev = url.searchParams.get('rev') || 'HEAD'
+      // wt：在哪个 worktree 里查（和日志区的选择保持一致，决定 HEAD 与可见引用）
+      const wtPath = url.searchParams.get('wt')
+      let cwd = toplevel
+      if (wtPath) {
+        const wt = await resolveWorktree(toplevel, wtPath)
+        if (!wt) return json(res, 400, { error: 'unknown worktree', commits: [] })
+        cwd = wt.path
+      }
+      const data = await getFileHistory(cwd, filePath, { follow, rev })
+      if (data.error) return json(res, 500, data)
+      return json(res, 200, { ...data, cwd, path: filePath })
+    }
+
+    const mHistDiff = p.match(/^\/api\/repos\/([^/]+)\/file-history-diff$/)
+    if (mHistDiff) {
+      const toplevel = dec(mHistDiff[1])
+      const sha = url.searchParams.get('sha') || ''
+      const pathAtCommit = url.searchParams.get('path') || ''
+      if (!sha || !pathAtCommit) return json(res, 400, { error: 'sha and path required' })
+      const wtPath = url.searchParams.get('wt')
+      let cwd = toplevel
+      if (wtPath) {
+        const wt = await resolveWorktree(toplevel, wtPath)
+        if (!wt) return json(res, 400, { error: 'unknown worktree' })
+        cwd = wt.path
+      }
+      const data = await getHistoryDiff(cwd, sha, pathAtCommit, { maxBytes: cfg.maxPatchBytes })
+      return json(res, 200, data)
+    }
+
+    // 文件列表：给「粘贴路径」的自动完成用。按仓库整体缓存（与 worktree 无关）
+    const mFiles = p.match(/^\/api\/repos\/([^/]+)\/files$/)
+    if (mFiles) {
+      const toplevel = dec(mFiles[1])
+      const data = await listFiles(toplevel)
+      if (data.error) return json(res, 500, data)
       return json(res, 200, data)
     }
 

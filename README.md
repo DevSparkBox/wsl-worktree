@@ -84,6 +84,7 @@
 | 打开位置 | 行内按钮：资源管理器、Windows Terminal |
 | 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
+| 单文件历史 | 文件行 hover 时钟图标，或详情面板顶部「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
 | 键盘 | `r` 刷新，`/` 聚焦仓库搜索（左栏收起时聚焦顶栏切换器），`[` `]` 开关左右面板 |
 
 ### 写操作
@@ -155,6 +156,84 @@ if (hardFail || (res.code !== 0 && tagConflicts.length === 0)) return { ok: fals
 ```
 
 `otherErrors` 只统计以 `error:` / `fatal:` 开头的行，`! [rejected]` 不算——它后面跟的是 `(would clobber existing tag)` 这种说明，不是错误前缀。
+
+---
+
+## 单文件历史（独立标签页）
+
+查一个文件的完整演变过程。入口有两个，指向同一动作：
+
+| 入口 | 说明 |
+|---|---|
+| 提交详情的文件行 | 行尾时钟图标，**hover 才显形**（不干扰「点整行看 diff」） |
+| 详情面板顶部 | 「文件历史」按钮，选中文件后常驻显示 |
+
+点击后在**新标签页**打开 `/history.html`，左右双栏：左边是提交列表，右边是选中那次的 diff。
+
+### 页面特征
+
+- 列表每条：作者色块（同名同色）+ 日期 + `+增 −删` + sha + 摘要
+- 路径**只在必要时显示**：改名时显示差异片段（`…/platformv2-unit/… → …/jmpt-unit/…`），或路径与当前不同才显示。同一文件每行重复长路径没意义
+- diff 带**双行号**，`j`/`k` 键上下切换
+- 顶部可关「跟踪改名」，关掉后只剩改名之后的历史
+- 分隔线可拖动，宽度记在 `localStorage`
+
+### 三个必须处理的坑（都在真实仓库上验证过）
+
+**① 取 diff 必须用「当时那个路径」**
+
+文件改名后，改名前的 commit 里它叫旧名字。用新路径去 diff 会得到**空结果**——不是报错，是静默空。
+
+实测（`old/name.txt` → `new/name.txt`）：
+
+```
+用旧路径 old/name.txt 取 c2 的 diff → 140 字节 ✓
+用新路径 new/name.txt 取 c2 的 diff →   0 字节 ✗
+```
+
+所以每条历史记录都带 `pathAtCommit`，diff 接口用它而不是用户传入的当前路径：
+
+```js
+const params = new URLSearchParams({ sha: c.sha, path: c.pathAtCommit })
+```
+
+**② 中文路径会被转义**
+
+这个仓库有大量中文文件名。git 默认把非 ASCII 转成 `\345\207\275` 形式，界面上是乱码，回传给 diff 时路径也对不上。
+
+```bash
+$ git log --name-only -- "data/.../[1-1][01]STUFF函数.sql"
+"data/.../[1-1][01]STUFF\345\207\275\346\225\260.sql"    # 转义了
+
+$ git -c core.quotepath=false log --name-only -- ...
+data/.../[1-1][01]STUFF函数.sql                          # 正确
+```
+
+`lib/git.mjs` 因此加了 `quotepath: false` 选项，内部注入 `-c core.quotepath=false`。注意项目里设了 `LC_ALL=C`，实测该选项在 C locale 下仍然有效。
+
+另外路径统一加 `:(literal)` 前缀，防 `[ ]` `*` `?` 被当通配符（实测这个仓库的 `[1-1][01]` 形态不传也不会错，但加着更稳）。
+
+**③ 解析 `--numstat -z` 的输出格式**
+
+用 numstat 而不是 name-status，是因为要显示 `+12 −3`（name-status 没有行数，得多跑一次 git）。`-z` 模式下改名条目长这样：
+
+```
+0\t0\t\0旧路径\0新路径\0
+20\t19\t路径\0
+```
+
+两个坑：
+
+- **记录边界不是 `\n\x01`**。`-z` 模式路径以 `\0` 结尾、不产生换行，下一条头部直接跟在 `\0` 后面，所以不能用换行做分隔。
+- **`\x01` 同时用于记录边界和字段分隔**，直接 split 会把一个提交切成 4 段。正确做法是按「`\x01` 后紧跟 40 位 hex」做锚点切分：
+
+```js
+const parts = stdout.split(/(?=\x01[0-9a-f]{40}\x01)/)
+```
+
+**④ `--follow` 不能分页**
+
+`--follow` 内部会重写路径跟踪逻辑，和 `--skip` 混用会错乱。所以一次性取全量、上限 500 条（超出标记 `truncated`），不做「加载更多」。
 
 ---
 
@@ -463,14 +542,18 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── scan.mjs            仓库扫描 + porcelain 解析
 │   ├── numstat.mjs         numstat -z 解析（含重命名）
 │   ├── ops.mjs             全部写操作（fetch/pull/checkout/create/remove/stale）
+│   ├── history.mjs         单文件历史（--follow / 改名路径 / numstat -z 解析）
 │   └── config.mjs          配置加载
 └── public\
     ├── index.html          单页骨架
     ├── style.css           浅色主题（跟随 IDE light）
-    └── app.js              全部交互逻辑 + 对话框，零框架
+    ├── app.js              全部交互逻辑 + 对话框，零框架
+    ├── history.html        单文件历史页（独立标签页）
+    ├── history.css         历史页样式（双栏）
+    └── history.js          历史页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
 
 **源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
 改完源码执行：
@@ -560,6 +643,9 @@ cp config.example.json config.json
 | `fetch` | `{prune?:bool, forceTags?:bool}` | 更新仓库所有远程；`forceTags` 才会覆盖被重打的 tag |
 | `tag-inspect` | `{tag}` | 查某 tag 的本地/远端 sha（冲突时用于展示）|
 | `pull` | `{wt, mode:'ff-only'\|'rebase'\|'merge'}` | 更新某个 worktree 的分支 |
+| `GET /api/repos/:id/file-history` | `?path=&wt=&follow=0&rev=` 单文件历史（含 pathAtCommit / 增删统计 / 改名信息） |
+| `GET /api/repos/:id/file-history-diff` | `?sha=&path=&wt=` 某个 commit 里该文件的 diff（path 必须是当时的路径） |
+| `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
 | `checkout` | `{wt, branch?, detachAt?, create?, startPoint?}` | 切换分支；`detachAt` 可传 tag 名（后端写成 `refs/tags/<tag>` 消除歧义）/ 分支名 / sha |
 | `worktrees` | `{path, branch, mode:'new'\|'existing'\|'remote'\|'tag'\|'detach', base?, lock?}` | 创建；`mode:'tag'` 时 `base` 为 tag 名，`branch` 非空则同时建分支 |
 | `worktree-preflight` | `{path}` | 删除前预检（只读） |
@@ -645,6 +731,10 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | tag 与分支同名 | 切换/创建时优先当 tag 处理（写全 `refs/tags/<tag>`），行为确定 |
 | 切到 tag / commit | 处于 detached 状态，界面明确提示；新建或创建 worktree 也支持 |
 | 有未推送提交的 worktree | 拒绝删除，列出那些 commit |
+| 文件被改名后查历史 | `--follow` 追到改名前；每条记录带当时的路径，diff 才不会空 |
+| 中文 / 含空格 / 方括号的文件名 | `core.quotepath=false` + `:(literal)` pathspec，全程不转义 |
+| 文件从未提交过 | 历史页明确提示「当前分支上没有历史」，区别于加载失败 |
+| 点历史条目时有多个请求在飞 | 用 sha 比对丢弃过期响应，避免快速点击时 diff 串台 |
 | 左栏收起 | 顶栏出现仓库切换器（带模糊搜索），不丢失换仓库的入口 |
 | 同名仓库在不同目录 | 顶栏候选显示目录前缀（`products/asset`）区分 |
 | 刷新页面 | 回到上次选中的仓库（hash 优先，localStorage 兜底），不再跳回第一个 |
@@ -697,6 +787,12 @@ node test-ui-checkout-tag.mjs
 
 # UI：刷新后恢复上次选中的仓库（22 项）
 node test-ui-persist-repo.mjs
+
+# 接口级：单文件历史（23 项，含改名/中文路径/统计）
+wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-file-history.mjs . && node test-file-history.mjs'
+
+# UI：文件历史入口与页面（27 项）
+node test-ui-file-history.mjs
 ```
 
 `test-ops.mjs` 必须在 WSL 里跑（它用 `/tmp` 绝对路径造仓库，Windows 侧 node 会把路径转成 `\tmp\...`）。

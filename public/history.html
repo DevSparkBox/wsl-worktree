@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>文件历史</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/history.css">
+</head>
+<body class="history-page">
+
+<header class="h-topbar">
+  <div class="h-brand">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.2" stroke="currentColor" stroke-width="1.3"/>
+      <path d="M8 4.6V8l2.4 1.6" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round"/>
+    </svg>
+    <span>History</span>
+  </div>
+  <span class="h-repo" id="h-repo"></span>
+  <span class="h-path-wrap"><span class="h-path mono" id="h-path"></span></span>
+  <div class="spacer"></div>
+  <label class="h-follow" id="h-follow-wrap" title="跟踪文件改名，把改名前的提交也包含进来">
+    <input type="checkbox" id="h-follow" checked>
+    <span>跟踪改名</span>
+  </label>
+  <span class="h-wt" id="h-wt" title="在哪个 worktree 中查看"></span>
+</header>
+
+<main class="h-layout" id="h-layout">
+  <!-- 左：历史列表 -->
+  <section class="h-list-pane" id="h-list-pane">
+    <div class="h-list-head">
+      <input class="h-filter" id="h-filter" placeholder="过滤 message / 作者 / sha…" spellcheck="false">
+    </div>
+    <div class="h-list-wrap" id="h-list-wrap">
+      <div class="h-list" id="h-list"></div>
+      <div class="h-empty" id="h-empty" hidden></div>
+    </div>
+  </section>
+
+  <div class="h-splitter" id="h-splitter" role="separator" aria-label="调整列表宽度" title="拖动调整宽度，双击复位"></div>
+
+  <!-- 右：diff -->
+  <section class="h-diff-pane" id="h-diff-pane">
+    <div class="h-diff-head">
+      <span class="h-diff-sha mono" id="h-diff-sha"></span>
+      <span class="h-diff-subject" id="h-diff-subject"></span>
+      <div class="spacer"></div>
+      <span class="h-diff-stat" id="h-diff-stat"></span>
+      <button class="h-btn" id="h-copy-sha" title="复制完整 sha">复制 sha</button>
+    </div>
+    <div class="h-diff-body" id="h-diff-body"></div>
+  </section>
+</main>
+
+<div class="h-toast" id="h-toast" hidden></div>
+
+<script type="module" src="/history.js"></script>
+</body>
+</html>

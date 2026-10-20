@@ -177,6 +177,7 @@ async function selectRepo(toplevel, force = false) {
   state.selectedSha = null
   state.selectedFile = null
   state.logWt = null
+  syncFileHistoryBtn()
   // 记住这次选择，刷新后能回到这里
   rememberRepo(toplevel)
   renderRepos()
@@ -446,6 +447,7 @@ $('btn-more').addEventListener('click', () => loadLog(false))
 async function selectCommit(sha) {
   state.selectedSha = sha
   state.selectedFile = null
+  syncFileHistoryBtn()
   // 窄屏时把详情抽屉滑出（同步顶栏按钮状态，走同一个开关避免状态不一致）
   if (window.matchMedia('(max-width: 1180px)').matches && $('layout').classList.contains('hide-right')) {
     document.getElementById('toggle-right').click()
@@ -503,7 +505,13 @@ function renderFileList(commit, files) {
       ? '<span style="color:var(--text-faint)">bin</span>'
       : `<span class="plus">+${f.add}</span> <span class="minus">−${f.del}</span>`
     const label = f.oldPath ? `${f.oldPath} → ${f.path}` : f.path
-    row.innerHTML = `<span class="file-path" title="${esc(label)}">${esc(f.path)}</span><span class="file-stat">${stat}</span>`
+    // 行尾的「历史」图标：hover 才显形，避免干扰「点整行看 diff」
+    row.innerHTML = `<span class="file-path" title="${esc(label)}">${esc(f.path)}</span>` +
+      `<span class="file-stat">${stat}</span>` +
+      `<button class="file-hist-btn" title="查看该文件的提交历史（新标签页）" aria-label="文件历史">` +
+      `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">` +
+      `<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>` +
+      `<path d="M8 4.8V8l2.2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>`
     frag.appendChild(row)
   }
 
@@ -519,6 +527,7 @@ function renderFileList(commit, files) {
 async function openFile(rowEl) {
   const path = rowEl.dataset.path
   state.selectedFile = path
+  syncFileHistoryBtn()
   for (const el of $('detail-body').querySelectorAll('.file-row')) {
     el.classList.toggle('active', el === rowEl)
   }
@@ -541,9 +550,42 @@ async function openFile(rowEl) {
 }
 
 $('detail-body').addEventListener('click', (e) => {
+  // 先判历史按钮：它在 .file-row 内部，不拦的话会同时触发 openFile
+  const histBtn = e.target.closest('.file-hist-btn')
+  if (histBtn) {
+    e.stopPropagation()
+    const row = histBtn.closest('.file-row')
+    if (row) openFileHistory(row.dataset.path)
+    return
+  }
   const row = e.target.closest('.file-row')
   if (row) openFile(row)
 })
+
+// ---------- 文件历史（新标签页） ----------
+/**
+ * 打开单文件历史页。
+ * wt 参数必须带上：--follow 和 diff 都要在确定的 worktree 里执行，
+ * 且要跟日志区当前选择的 worktree 保持一致，否则「在哪个分支上看历史」会不一致。
+ */
+function openFileHistory(path) {
+  if (!state.repo || !path) return
+  const params = new URLSearchParams({ repo: state.repo.id, path })
+  const wt = state.logWt || state.worktrees?.find((w) => w.isMain)?.path || state.repo.toplevel
+  if (wt) params.set('wt', wt)
+  window.open(`/history.html?${params}`, '_blank', 'noopener')
+}
+
+$('btn-file-history').addEventListener('click', () => {
+  if (state.selectedFile) openFileHistory(state.selectedFile)
+})
+
+/** 详情面板顶部按钮只在选中了文件时出现 */
+function syncFileHistoryBtn() {
+  const btn = $('btn-file-history')
+  if (!btn) return
+  btn.hidden = !state.selectedFile
+}
 
 $('detail-close').addEventListener('click', () => setPanel('right', false))
 
