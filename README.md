@@ -452,7 +452,10 @@ wt=/etc → 400 unknown worktree              → 拒绝越权
 ```
 E:\ai-spaces\tools\wsl-worktree\
 ├── server.mjs              HTTP 服务 + 路由
-├── config.json             配置（端口、扫描根目录、缓存 TTL）
+├── config.json             本机配置（不入库，从 config.example.json 复制）
+├── config.example.json     配置模板
+├── .gitattributes          行尾锁 LF（deploy.sh 必须是 LF）
+├── .gitignore              排除 shots/、config.json 等
 ├── deploy.sh               同步到 WSL 并重启服务
 ├── wsl-worktree.service    systemd user unit
 ├── lib\
@@ -482,7 +485,12 @@ wsl -e bash /mnt/e/ai-spaces/tools/wsl-worktree/deploy.sh
 
 ## 配置
 
-`config.json`：
+`config.json` **不在仓库里**（它含本机绝对路径，已列入 `.gitignore`）。克隆后从模板复制一份：
+
+```bash
+cp config.example.json config.json
+# 然后改里面的 roots 和 windows.wt
+```
 
 ```json
 {
@@ -500,13 +508,37 @@ wsl -e bash /mnt/e/ai-spaces/tools/wsl-worktree/deploy.sh
 }
 ```
 
-- `roots`：扫描根目录，可加多个
+- `roots`：扫描根目录，可加多个。支持 `~/codes` 写法，会自动展开为当前用户的家目录
 - `scanMaxDepth`：递归深度。当前 `~/codes` 最深的仓库是 `products/asset`（4 层）
 - `host: 0.0.0.0`：Mirrored 网络下 Windows 侧可直接访问
+- `windows.wt`：**可留空**。留空时「终端」按钮会提示未配置，不会静默失败（不同机器 wt.exe 位置不同）
+
+**没有 `config.json` 也能跑**：全部走默认值（端口 7801、roots 为 `~/codes`、wt 为空）。所以克隆下来直接 `node server.mjs` 就能用，只是终端按钮不可用。
 
 改完配置也要执行 `deploy.sh`（重启才生效）。
 
 ---
+
+## 仓库与提交
+
+本目录是一个独立 git 仓库（`main` 分支）。几个约定：
+
+**行尾锁死为 LF**（`.gitattributes`）。这个项目跨 Windows 编辑、WSL 执行，如果 `deploy.sh` 被转成 CRLF，在 WSL 里会报 `bad interpreter: /usr/bin/env bash^M`，极难排查。所以：
+
+```
+* text=auto eol=lf
+*.sh text eol=lf
+```
+
+**不入库的内容**：
+
+| 路径 | 原因 |
+|---|---|
+| `shots/` | UI 测试截图，每次跑测试都重新生成，4.9MB |
+| `config.json` | 含本机绝对路径，用 `config.example.json` 作模板 |
+| `*.log` / `node_modules/` / `.?.mjs` | 运行产物、依赖、一次性调试脚本 |
+
+排除了截图后 `.git` 只有 433KB。
 
 ## API
 
