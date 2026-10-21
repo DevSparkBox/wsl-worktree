@@ -39,6 +39,13 @@ const state = {
   })(),
   // 上一次渲染用的内容，切换高亮时直接重渲染，不必重新请求
   lastContent: null,
+  // ---- 搜索 ----
+  mode: 'path',        // 'path' 路径过滤 | 'content' 内容搜索
+  grep: null,          // 最近的搜索结果 { files, total, truncated }
+  grepBusy: false,
+  grepQuery: '',       // 上一次实际执行的查询（用于丢弃过期响应）
+  scopePath: '',       // 「限当前目录」用的目录
+  jumpLine: null,      // 打开文件后要跳到的行号（来自搜索命中）
 }
 
 // ---------- 工具 ----------
@@ -173,6 +180,8 @@ function dirRow(d, depth, isOpen) {
     `<span class="t-name${compressed ? ' t-name-compressed' : ''}"${compressed ? ` title="${esc(d.name)}"` : ''}>${esc(shown)}</span>` +
     `<span class="t-count">${countFiles(d)}</span>`
   el.addEventListener('click', () => {
+    // 记下当前点中的目录，供内容搜索的「限当前目录」使用
+    state.scopePath = d.path
     if (state.expanded.has(d.path)) {
       state.expanded.delete(d.path)
     } else {
@@ -237,10 +246,20 @@ function fileRow(path, name, title, depth = 0, size = null, showDir = false) {
 // ============================================================
 // 右侧文件内容
 // ============================================================
-async function selectFile(path) {
+/**
+ * @param {string} path
+ * @param {{jumpLine?: number|null}} [opts]
+ *        jumpLine：打开后滚到该行并高亮（内容搜索点命中行时用）
+ */
+async function selectFile(path, opts = {}) {
   state.selected = path
+  state.jumpLine = opts.jumpLine ?? null
   // 只更新选中态的类，不整棵树重渲染（18k 文件的树重渲染会明显卡）
   for (const el of $('t-tree').querySelectorAll('.t-file')) {
+    el.classList.toggle('active', el.dataset.path === path)
+  }
+  // 搜索结果里也标出当前文件
+  for (const el of $('t-grep-results').querySelectorAll('.t-grep-file')) {
     el.classList.toggle('active', el.dataset.path === path)
   }
 
@@ -281,8 +300,16 @@ async function selectFile(path) {
     $('t-file-meta').textContent = `${data.lines} 行 · ${fmtSize(data.size)}${langLabel}`
     // 缓存内容：切换高亮开关时直接重渲染，不用再请求一次
     state.lastContent = data.content
-    body.replaceChildren(renderCode(data.content, path))
-    body.scrollTop = 0
+    const jump = opts.jumpLine
+    body.replaceChildren(renderCode(data.content, path, jump))
+    if (jump) {
+      // 滚动到命中行并居中，让上下文可见
+      const row = body.querySelector(`tr[data-line="${jump}"]`)
+      if (row?.scrollIntoView) row.scrollIntoView({ block: 'center' })
+      else body.scrollTop = 0
+    } else {
+      body.scrollTop = 0
+    }
     if (data.truncated) {
       const t = document.createElement('div')
       t.className = 't-empty'
@@ -313,7 +340,7 @@ const LANG_LABEL = {
   properties: 'Properties', env: 'Env', dockerfile: 'Dockerfile', makefile: 'Makefile',
 }
 
-function renderCode(content, path) {
+function renderCode(content, path, jumpLine = null) {
   const wrap = document.createElement('div')
   wrap.className = 't-code-wrap'
 
@@ -346,6 +373,9 @@ function renderCode(content, path) {
 
   for (let i = 0; i < lines.length; i++) {
     const tr = document.createElement('tr')
+    // 行号挂到 data-line 上：搜索命中跳转时靠它定位
+    tr.dataset.line = String(i + 1)
+    if (jumpLine && i + 1 === jumpLine) tr.className = 'hit-line'
     const tdNo = document.createElement('td')
     tdNo.className = 'ln'
     tdNo.textContent = String(i + 1)
@@ -409,6 +439,191 @@ function applyFilter() {
   // 过滤结果里默认选中第一条，省一次点击
   const first = scored[0]?.[0]
   if (first && first !== state.selected) selectFile(first)
+}
+
+// ============================================================
+// 内容搜索（git grep）
+//
+// 与路径过滤的区别：路径过滤只看文件名/路径，不发请求；
+// 内容搜索是真的在这个 commit 的对象库里 grep，慢一些但有真实结果。
+// 两者用同一个输入框，靠模式切换区分。
+// ============================================================
+let grepTimer = null
+let grepSeq = 0
+
+/** 切换 路径 / 内容 模式 */
+function setMode(mode) {
+  if (state.mode === mode) return
+  state.mode = mode
+  $('t-mode-path').classList.toggle('active', mode === 'path')
+  $('t-mode-content').classList.toggle('active', mode === 'content')
+  $('t-grep-bar').hidden = mode !== 'content'
+  $('t-filter').placeholder = mode === 'content' ? '搜索文件内容…' : '过滤路径…'
+  $('t-filter').value = ''
+  state.filter = ''
+  state.matched = null
+  state.grep = null
+  state.grepQuery = ''
+
+  if (mode === 'content') {
+    // 内容模式：隐藏树，等用户输入
+    $('t-tree').hidden = true
+    $('t-tree-empty').hidden = true
+    showGrepPlaceholder()
+  } else {
+    // 回到路径模式：恢复树
+    $('t-tree').hidden = false
+    $('t-grep-results').hidden = true
+    renderTree()
+  }
+  $('t-filter').focus()
+}
+
+function showGrepPlaceholder(text) {
+  const box = $('t-grep-results')
+  box.hidden = false
+  box.innerHTML = `<div class="t-grep-empty">${esc(text ||
+    '输入关键词搜索文件内容。搜索范围是这个提交的快照，不是当前磁盘。')}</div>`
+  $('t-grep-stat').textContent = ''
+}
+
+/** 执行搜索（带防抖） */
+function scheduleGrep() {
+  clearTimeout(grepTimer)
+  const q = $('t-filter').value.trim()
+  if (!q) {
+    state.grep = null
+    state.grepQuery = ''
+    showGrepPlaceholder()
+    return
+  }
+  // 输入停顿 260ms 再发请求，避免逐字符打服务
+  grepTimer = setTimeout(() => runGrep(q), 260)
+}
+
+async function runGrep(q) {
+  const seq = ++grepSeq
+  state.grepQuery = q
+  state.grepBusy = true
+  const box = $('t-grep-results')
+  box.hidden = false
+  $('t-tree').hidden = true
+  box.innerHTML = '<div class="t-grep-empty">搜索中…</div>'
+  $('t-grep-stat').textContent = ''
+
+  const params = new URLSearchParams({ sha, q })
+  if (wtPath) params.set('wt', wtPath)
+  if ($('t-grep-icase').checked) params.set('i', '1')
+  if ($('t-grep-regex').checked) params.set('re', '1')
+  // 限当前目录：只有在树里点过目录、且开关打开时才生效
+  if ($('t-grep-scope').checked && state.scopePath) params.set('path', state.scopePath)
+
+  const t0 = performance.now()
+  try {
+    const data = await api(`/api/repos/${repoId}/grep?${params}`)
+    // 丢弃过期响应：用户可能已经改了关键词
+    if (seq !== grepSeq || state.grepQuery !== q) return
+    state.grep = data
+    state.grepBusy = false
+    renderGrepResults(data, Math.round(performance.now() - t0))
+  } catch (err) {
+    if (seq !== grepSeq) return
+    state.grepBusy = false
+    box.innerHTML = `<div class="t-grep-empty" style="color:var(--red)">${esc(err.message)}</div>`
+  }
+}
+
+function renderGrepResults(data, elapsedMs) {
+  const box = $('t-grep-results')
+  box.hidden = false
+  $('t-tree').hidden = true
+
+  const files = data.files || []
+  if (!files.length) {
+    box.innerHTML = `<div class="t-grep-empty">没有匹配的文件内容。<br>
+      <span style="color:var(--text-faint)">换个关键词，或确认搜索范围（当前限定在 <code>${esc(state.scopePath || '全仓库')}</code>）。</span></div>`
+    $('t-grep-stat').textContent = `0 个文件 · ${elapsedMs}ms`
+    return
+  }
+
+  $('t-grep-stat').textContent =
+    `${files.length} 个文件 · ${data.total} 处` + (data.truncated ? ' · 已截断' : '') + ` · ${elapsedMs}ms`
+
+  const frag = document.createDocumentFragment()
+  // 顶层给一个「全部折叠/展开」式的汇总行
+  const sum = document.createElement('div')
+  sum.className = 't-grep-sum'
+  sum.textContent = `${files.length} 个文件命中，共 ${data.total} 处`
+  frag.appendChild(sum)
+
+  for (const f of files) {
+    const group = document.createElement('div')
+    group.className = 't-grep-file'
+    group.dataset.path = f.path
+
+    const head = document.createElement('div')
+    head.className = 't-grep-filehead'
+    head.innerHTML =
+      `<span class="t-grep-fname">${esc(f.path.split('/').pop())}</span>` +
+      `<span class="t-grep-fdir" title="${esc(f.path)}">${esc(shortDir(f.path))}</span>` +
+      `<span class="t-grep-count">${f.hits.length}</span>`
+    // 点文件名表头：打开文件但不跳行
+    head.addEventListener('click', () => {
+      state.jumpLine = f.hits[0]?.line ?? null
+      selectFile(f.path)
+    })
+    group.appendChild(head)
+
+    for (const h of f.hits) {
+      const row = document.createElement('div')
+      row.className = 't-grep-hit'
+      row.dataset.line = String(h.line)
+      row.dataset.path = f.path
+      // 把命中的关键词标出来（用当前查询当子串，正则模式下可能标不准，
+      // 所以只在字面量模式下做标记）
+      const marked = $('t-grep-regex').checked
+        ? esc(h.text)
+        : markText(h.text, $('t-filter').value.trim(), $('t-grep-icase').checked)
+      row.innerHTML =
+        `<span class="t-grep-ln">${h.line}</span>` +
+        `<span class="t-grep-code">${marked}</span>`
+      row.addEventListener('click', () => {
+        state.jumpLine = h.line
+        selectFile(f.path, { jumpLine: h.line })
+      })
+      group.appendChild(row)
+    }
+    frag.appendChild(group)
+  }
+  box.replaceChildren(frag)
+}
+
+/** 目录部分：只显示末两级，长路径中间省略 */
+function shortDir(p) {
+  const parts = String(p).split('/')
+  if (parts.length <= 1) return ''
+  const dir = parts.slice(0, -1)
+  if (dir.length <= 2) return dir.join('/')
+  return '…/' + dir.slice(-2).join('/')
+}
+
+/** 在命中行里高亮关键词（按字面量，不区分是否为词首） */
+function markText(text, q, ignoreCase) {
+  if (!q) return esc(text)
+  const hay = ignoreCase ? text.toLowerCase() : text
+  const needle = ignoreCase ? q.toLowerCase() : q
+  let out = ''
+  let from = 0
+  while (true) {
+    const idx = hay.indexOf(needle, from)
+    if (idx < 0) break
+    out += esc(text.slice(from, idx))
+    out += `<mark>${esc(text.slice(idx, idx + needle.length))}</mark>`
+    from = idx + needle.length
+    if (needle.length === 0) break
+  }
+  out += esc(text.slice(from))
+  return out
 }
 
 /**
@@ -475,13 +690,42 @@ const SPLIT_KEY = 'wsl-worktree.treeWidth'
 })()
 
 // ---------- 事件绑定 ----------
-$('t-filter').addEventListener('input', applyFilter)
+// 输入框：按模式分发（路径过滤是纯前端，内容搜索要打接口）
+$('t-filter').addEventListener('input', () => {
+  if (state.mode === 'content') scheduleGrep()
+  else applyFilter()
+})
 $('t-filter').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     e.target.value = ''
-    applyFilter()
+    if (state.mode === 'content') {
+      state.grep = null
+      state.grepQuery = ''
+      showGrepPlaceholder()
+    } else {
+      applyFilter()
+    }
+  }
+  // Enter：内容模式下立即搜（不等防抖）
+  if (e.key === 'Enter' && state.mode === 'content') {
+    e.preventDefault()
+    clearTimeout(grepTimer)
+    const q = $('t-filter').value.trim()
+    if (q) runGrep(q)
   }
 })
+
+// 模式切换
+$('t-mode-path').addEventListener('click', () => setMode('path'))
+$('t-mode-content').addEventListener('click', () => setMode('content'))
+
+// 搜索选项变化后重新执行（限当前目录、忽略大小写、正则都会影响结果）
+for (const id of ['t-grep-icase', 't-grep-regex', 't-grep-scope']) {
+  $(id).addEventListener('change', () => {
+    const q = $('t-filter').value.trim()
+    if (q) runGrep(q)
+  })
+}
 
 $('t-collapse-all').addEventListener('click', () => {
   state.expanded.clear()

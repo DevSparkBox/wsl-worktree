@@ -29,7 +29,13 @@
   <!-- 左：文件树 -->
   <section class="t-tree-pane">
     <div class="t-tree-head">
-      <input class="t-filter" id="t-filter" placeholder="过滤路径…" spellcheck="false">
+      <div class="t-search">
+        <input class="t-filter" id="t-filter" placeholder="过滤路径…" spellcheck="false">
+        <div class="t-mode" role="group" aria-label="搜索模式">
+          <button class="t-mode-btn active" id="t-mode-path" title="按路径过滤（只看树，不发请求）">路径</button>
+          <button class="t-mode-btn" id="t-mode-content" title="在文件内容里搜（作用于此提交的快照）">内容</button>
+        </div>
+      </div>
       <label class="t-toggle" id="t-compact-wrap" title="把只有一个子目录的层级合并成一行（如 com/mysoft/jmpt）">
         <input type="checkbox" id="t-compact" checked>
         <span>合并目录</span>
@@ -40,9 +46,30 @@
         </svg>
       </button>
     </div>
+
+    <!-- 内容搜索的选项栏：只在「内容」模式下显示 -->
+    <div class="t-grep-bar" id="t-grep-bar" hidden>
+      <label class="t-toggle" title="忽略大小写">
+        <input type="checkbox" id="t-grep-icase">
+        <span>忽略大小写</span>
+      </label>
+      <label class="t-toggle" title="按正则表达式匹配（默认按字面量）">
+        <input type="checkbox" id="t-grep-regex">
+        <span>正则</span>
+      </label>
+      <label class="t-toggle" title="只搜选中的目录（在树里点一个目录后再勾）">
+        <input type="checkbox" id="t-grep-scope">
+        <span>限当前目录</span>
+      </label>
+      <div class="spacer"></div>
+      <span class="t-grep-stat" id="t-grep-stat"></span>
+    </div>
+
     <div class="t-tree-wrap" id="t-tree-wrap">
       <div class="t-tree" id="t-tree" role="tree"></div>
       <div class="t-empty" id="t-tree-empty" hidden></div>
+      <!-- 内容搜索结果：替换树的位置显示 -->
+      <div class="t-grep-results" id="t-grep-results" hidden></div>
     </div>
   </section>
 

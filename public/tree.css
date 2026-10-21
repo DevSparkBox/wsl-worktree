@@ -134,7 +134,10 @@
   min-height: 0;
   padding: 3px 0;
 }
+/* 注意：显式写了 display 的元素会让 hidden 属性失效，
+   所以必须补一条 [hidden] { display: none }，否则 hidden=true 时仍然可见。 */
 .t-tree { display: block; }
+.t-tree[hidden] { display: none; }
 
 /* ---------- 树节点 ---------- */
 .t-node {
@@ -412,3 +415,173 @@
 .hl-md-code { color: var(--green); background: var(--bg-alt); }
 .hl-md-b    { font-weight: 600; }
 .hl-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }
+
+/* ============================================================
+   路径 / 内容 搜索
+   ============================================================ */
+.t-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.t-search .t-filter { flex: 1; min-width: 0; }
+
+/* 模式切换：两个紧贴的小按钮，比下拉更省一次点击 */
+.t-mode {
+  flex: none;
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.t-mode-btn {
+  font: 10.5px var(--sans);
+  padding: 3px 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.t-mode-btn + .t-mode-btn { border-left: 1px solid var(--border); }
+.t-mode-btn:hover { background: var(--bg-hover); color: var(--text); }
+.t-mode-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* 内容搜索的选项栏 */
+.t-grep-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+  flex-wrap: wrap;
+}
+.t-grep-bar[hidden] { display: none; }
+.t-grep-bar .t-toggle { font-size: 10px; }
+.t-grep-stat {
+  font: 10px var(--mono);
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+
+/* 搜索结果面板 */
+.t-grep-results {
+  padding: 0 0 12px;
+}
+.t-grep-results[hidden] { display: none; }
+.t-grep-empty {
+  padding: 18px 14px;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-faint);
+}
+.t-grep-empty code {
+  font-family: var(--mono);
+  background: var(--bg-alt);
+  padding: 0 3px;
+  border-radius: 3px;
+}
+
+.t-grep-sum {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 4px 10px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+}
+
+.t-grep-file { border-bottom: 1px solid var(--border); }
+.t-grep-file.active > .t-grep-filehead { background: var(--accent-soft); }
+
+.t-grep-filehead {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  padding: 4px 10px;
+  cursor: pointer;
+  background: var(--bg-alt);
+  min-width: 0;
+}
+.t-grep-filehead:hover { background: var(--bg-hover); }
+.t-grep-fname {
+  font: 11px var(--mono);
+  color: var(--text);
+  font-weight: 500;
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.t-grep-fdir {
+  flex: 1;
+  min-width: 0;
+  font: 9.5px var(--mono);
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.t-grep-count {
+  flex: none;
+  font: 9.5px var(--mono);
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.t-grep-hit {
+  display: flex;
+  gap: 6px;
+  padding: 1px 10px 1px 0;
+  cursor: pointer;
+  font: 11px/1.55 var(--mono);
+  color: var(--text-dim);
+  white-space: pre;
+  overflow: hidden;
+}
+.t-grep-hit:hover { background: var(--bg-hover); color: var(--text); }
+.t-grep-ln {
+  flex: none;
+  width: 42px;
+  text-align: right;
+  color: var(--text-faint);
+  font-size: 10px;
+  user-select: none;
+}
+.t-grep-code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.t-grep-hit mark {
+  background: #fff3bf;
+  color: var(--text);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* 跳转后的命中行高亮 */
+.t-code tr.hit-line td.code { background: #fff8dd; }
+.t-code tr.hit-line td.ln {
+  background: #fdf0c4;
+  color: var(--text-dim);
+  font-weight: 600;
+}

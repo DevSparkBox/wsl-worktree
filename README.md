@@ -129,6 +129,7 @@ if (e.target.closest('a.ext-link')) return
 | 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
 | 完整文件树 | 详情面板右上角「文件树」→ 新标签页（整仓库快照，左树右内容，仿 fork） |
 | 合并单链目录 | 文件树默认把 com/mysoft/jmpt 这类单链压成一行，可开关 |
+| 内容搜索 | 文件树里可切换「路径/内容」模式，在提交快照里 grep 并跳转到命中行 |
 | 语法高亮 | 文件内容按语言上色（TS/JS/Java/Vue/LESS/MD/SQL/XML 等），可开关 |
 | 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
 | 键盘 | `r` 刷新，`/` 聚焦仓库搜索（左栏收起时聚焦顶栏切换器），`[` `]` 开关左右面板 |
@@ -284,6 +285,70 @@ rules.push({ re: /[^\w$"'`/#@\d-]+/y, cls: null })
 - **十六进制颜色不能当选择器**。`#fff` 会被 `[.#][A-Za-z_][\w-]*` 当成 id 选择器，`#333` 因为首字符是数字根本不匹配。所以颜色规则（`#[0-9a-fA-F]{3,8}`）必须排在选择器规则**之前**。
 - **标识符规则不能同时给 `cls` 和 `resolve`**。写了 `{ cls: 'ident', resolve: true }` 时，`if (r.cls)` 分支会先命中，关键字查表永远不执行，所有关键字都变成普通标识符色。改成 `cls: null` 才触发 `resolve`。
 - 认不出的扩展名**不高亮**，不瞎猜——猜错比不上色更难读。
+
+### 内容搜索（git grep）
+
+文件树头部有两个搜索模式，点「路径 / 内容」切换：
+
+| 模式 | 行为 | 是否发请求 |
+|---|---|---|
+| 路径 | 按文件名/路径模糊过滤，只缩窄树 | 否，纯前端 |
+| 内容 | 在当前提交的文件内容里 grep | 是 |
+
+**为什么用 `git grep` 而不是 `rg` 搜物理目录**
+
+这是本功能最关键的技术选择。文件树的语义是「这个 commit 当时的快照」：
+
+```bash
+git grep -I -n -z --no-color -F -e <pattern> <commit> -- <path>
+```
+
+它直接在**对象库**里搜，不需要检出文件。而 `rg` 搜的是 worktree 的磁盘内容，在查看旧提交时会给出**错误答案**——文件可能已改名、已删除、尚未创建。
+
+实测证据：在 2026 年 1 月的旧 commit 上搜 `STUFF`，能搜到 `MySQL/[1-1][01]STUFF函数.sql`——这个路径在当前 worktree 里已经改名为 `mysql/`。
+
+**性能对比**（18188 个文件）：
+
+| 操作 | 耗时 |
+|---|---|
+| `git grep` 搜普通词（390 处命中） | 446ms |
+| `git grep` 精确词（2 文件命中） | 82ms |
+| `git grep` 宽正则匹配 6098 文件 | 194ms |
+| `rg` 搜同一目录（同条件） | 43ms |
+
+只慢一倍，不是数量级差异——两者都是逐文件扫描，git grep 的数据源是打包的 object（有 delta 压缩，实际 I/O 反而更少）。所以**不需要退到「搜 worktree 目录」的方案**。
+
+**三个实现坑**
+
+**① `-z` 的输出格式和直觉不同**
+
+按理说 `-z` 应该是 `path\0lineNo\0content\0`，但实际用 `od -c` 看字节是：
+
+```
+<sha>:<path> \0 <lineNo> \0 <content> \n <sha>:<path> \0 ...
+```
+
+也就是路径和行号之间是 `\0`，但**记录之间仍然是 `\n`**，而且路径前带 `<rev>:` 前缀。
+
+所以不能简单按 `\0` 三三分组（试过，content 里会混入下一条记录）。正确做法：先按 `\n` 切记录，每条再按前两个 `\0` 切。路径去掉**第一个**冒号前的部分（路径本身可能含冒号）。
+
+**② 中文路径要 `core.quotepath=false`**
+
+和文件历史那边同一个坑。不加的话搜到的是 `[1-1][01]STUFF\345\207\275\346\225\260.sql`，前端拿这个路径去打开文件会对不上。
+
+**③ 用户输入默认按字面量（`-F`）**
+
+搜索框里输入 `$(`、`[` 这类正则元字符是很自然的行为，按正则会直接报错。所以默认 `-F`，需要正则时勾选「正则」（切到 `-E`）。
+
+**界面细节**
+
+- 选项栏：忽略大小写、正则、**限当前目录**（勾选后只用树里最后点中的那个目录）
+- 结果按文件分组，文件名 + 末两级目录 + 命中数；命中关键词用 `<mark>` 高亮
+- **点命中行 → 右侧打开该文件、滚到该行、整行高亮**（`tr.hit-line`）
+- 输入防抖 260ms，避免逐字符打服务；Enter 立即搜
+- 顶部显示 `N 个文件 · M 处 · 耗时ms`，命中超过 2000 处标记「已截断」
+
+**一处 CSS 陷阱**：`.t-tree { display: block }` 会让 `hidden` 属性失效——显式写了 `display` 的元素，浏览器默认的 `[hidden] { display: none }` 优先级更低。结果就是代码里 `tree.hidden = true` 生效了，但树照样显示。必须补 `.t-tree[hidden] { display: none }`。
 
 ### 单链目录合并（compact folders）
 
@@ -769,6 +834,7 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── ops.mjs             全部写操作（fetch/pull/checkout/create/remove/stale）
 │   ├── history.mjs         单文件历史（--follow / 改名路径 / numstat -z 解析）
 │   ├── tree.mjs            完整文件树（ls-tree -r -l -z / 文件内容读取）
+│   ├── grep.mjs            在 commit 快照里按内容搜索（git grep -z 解析）
 │   └── config.mjs          配置加载
 └── public\
     ├── index.html          单页骨架
@@ -875,6 +941,7 @@ cp config.example.json config.json
 | `GET /api/repos/:id/file-history-diff` | `?sha=&path=&wt=` 某个 commit 里该文件的 diff（path 必须是当时的路径） |
 | `GET /api/repos/:id/tree` | `?sha=&wt=` 某提交的完整文件树（sha 会解析成完整值） |
 | `GET /api/repos/:id/file-content` | `?sha=&path=&wt=` 某提交里某文件的内容（二进制/超大文件单独标记） |
+| `GET /api/repos/:id/grep` | `?sha=&q=&path=&i=1&re=1` 在提交快照里按内容搜索（git grep） |
 | `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
 | `checkout` | `{wt, branch?, detachAt?, create?, startPoint?}` | 切换分支；`detachAt` 可传 tag 名（后端写成 `refs/tags/<tag>` 消除歧义）/ 分支名 / sha |
 | `worktrees` | `{path, branch, mode:'new'\|'existing'\|'remote'\|'tag'\|'detach', base?, lock?}` | 创建；`mode:'tag'` 时 `base` 为 tag 名，`branch` 非空则同时建分支 |
@@ -975,6 +1042,10 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | 打开超大文件（>512KB） | 不高亮、按纯文本显示；>2MB 直接提示不展示 |
 | 文件内容里有 `<script>` | 高亮输出前全部转义；纯文本路径用 textContent |
 | 认不出扩展名（LICENSE 等） | 不高亮，不显示语言名，不瞎猜 |
+| 在旧提交里搜内容 | `git grep <commit>` 搜对象库，结果与那次提交一致（不是今天的磁盘） |
+| 搜索词含 `$(` `[` 等正则元字符 | 默认按字面量（`-F`），不会报错；需要正则时勾选 |
+| 搜索命中过多（>2000 处） | 截断并标记「已截断」，避免宽正则刷爆内存 |
+| 中文路径的搜索结果 | `core.quotepath=false`，路径原样返回，可直接用于打开文件 |
 | 文件树里搜同名文件 | 文件名精确/前缀命中优先于路径模糊分；过滤结果行内显示所在目录 |
 | 每级只有一个子目录的长链 | 默认合并成一行（`com/mysoft/jmpt`），长链中间省略为 `src/…/common` |
 | 目录既有文件又有唯一子目录 | 不合并（那是「真目录」），只合并其下的纯目录链 |
@@ -1050,6 +1121,9 @@ node test-highlight.mjs
 
 # 纯逻辑：URL 链接化（37 项，含协议白名单/中文标点边界）
 node test-linkify.mjs
+
+# UI：内容搜索（40 项，含接口与页面）
+node test-ui-grep.mjs
 
 # UI：commit 里的 URL 可点击（16 项）
 node test-ui-links.mjs

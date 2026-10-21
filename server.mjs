@@ -10,6 +10,7 @@ import { parseNumstatZ } from './lib/numstat.mjs'
 import * as ops from './lib/ops.mjs'
 import { getFileHistory, getHistoryDiff, listFiles } from './lib/history.mjs'
 import { listTree, catFile } from './lib/tree.mjs'
+import { grepTree } from './lib/grep.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
@@ -372,6 +373,31 @@ const server = createServer(async (req, res) => {
       }
       const data = await catFile(cwd, sha, path)
       if (data.notFound) return json(res, 404, data)
+      if (data.error) return json(res, 500, data)
+      return json(res, 200, data)
+    }
+
+    // ---------- 在某个 commit 的文件树里按内容搜索 ----------
+    const mGrep = p.match(/^\/api\/repos\/([^/]+)\/grep$/)
+    if (mGrep) {
+      const toplevel = dec(mGrep[1])
+      const sha = url.searchParams.get('sha') || 'HEAD'
+      const pattern = url.searchParams.get('q') || ''
+      if (!pattern) return json(res, 400, { error: 'q required', files: [] })
+      const subPath = url.searchParams.get('path') || ''
+      const wtPath = url.searchParams.get('wt')
+      let cwd = toplevel
+      if (wtPath) {
+        const wt = await resolveWorktree(toplevel, wtPath)
+        if (!wt) return json(res, 400, { error: 'unknown worktree', files: [] })
+        cwd = wt.path
+      }
+      const data = await grepTree(cwd, sha, {
+        pattern,
+        path: subPath,
+        ignoreCase: url.searchParams.get('i') === '1',
+        regex: url.searchParams.get('re') === '1',
+      })
       if (data.error) return json(res, 500, data)
       return json(res, 200, data)
     }
