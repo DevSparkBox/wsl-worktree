@@ -11,6 +11,7 @@ import * as ops from './lib/ops.mjs'
 import { getFileHistory, getHistoryDiff, listFiles } from './lib/history.mjs'
 import { listTree, catFile } from './lib/tree.mjs'
 import { grepTree } from './lib/grep.mjs'
+import { refsAtCommit } from './lib/refs.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
@@ -399,6 +400,23 @@ const server = createServer(async (req, res) => {
         regex: url.searchParams.get('re') === '1',
       })
       if (data.error) return json(res, 500, data)
+      return json(res, 200, data)
+    }
+
+    // ---------- 某个 commit 上的 refs（tag / 分支） ----------
+    const mRefs = p.match(/^\/api\/repos\/([^/]+)\/refs-at$/)
+    if (mRefs) {
+      const toplevel = dec(mRefs[1])
+      const sha = url.searchParams.get('sha') || 'HEAD'
+      const wtPath = url.searchParams.get('wt')
+      let cwd = toplevel
+      if (wtPath) {
+        const wt = await resolveWorktree(toplevel, wtPath)
+        if (!wt) return json(res, 400, { error: 'unknown worktree', tags: [], branches: [] })
+        cwd = wt.path
+      }
+      const data = await refsAtCommit(cwd, sha)
+      if (data.error) return json(res, 404, data)
       return json(res, 200, data)
     }
 

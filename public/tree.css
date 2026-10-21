@@ -585,3 +585,38 @@
   color: var(--text-dim);
   font-weight: 600;
 }
+
+/* ---------- 顶栏的 tag 徽章 ---------- */
+.t-tags {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  max-width: 340px;
+  overflow: hidden;
+}
+.t-tags[hidden] { display: none; }
+
+.t-tag {
+  font: 10.5px var(--mono);
+  padding: 1px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+  /* 轻量 tag：描边；annotated tag 用实色（见 .t-tag-ann） */
+  background: transparent;
+  color: var(--green);
+  box-shadow: inset 0 0 0 1px var(--green);
+  line-height: 1.5;
+}
+.t-tag-ann {
+  background: var(--green-soft);
+  color: var(--green);
+  box-shadow: none;
+  font-weight: 500;
+}
+.t-tag-more {
+  background: var(--bg-alt);
+  color: var(--text-dim);
+  box-shadow: none;
+  cursor: default;
+}

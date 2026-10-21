@@ -129,6 +129,7 @@ if (e.target.closest('a.ext-link')) return
 | 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
 | 完整文件树 | 详情面板右上角「文件树」→ 新标签页（整仓库快照，左树右内容，仿 fork） |
 | 合并单链目录 | 文件树默认把 com/mysoft/jmpt 这类单链压成一行，可开关 |
+| 发布标签 | 文件树顶栏显示指向该提交的 tag（轻量/annotated 样式区分） |
 | 内容搜索 | 文件树里可切换「路径/内容」模式，在提交快照里 grep 并跳转到命中行 |
 | 语法高亮 | 文件内容按语言上色（TS/JS/Java/Vue/LESS/MD/SQL/XML 等），可开关 |
 | 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
@@ -228,6 +229,33 @@ if (hardFail || (res.code !== 0 && tagConflicts.length === 0)) return { ok: fals
 - 从文件行进来时 URL 带 `path`，进去自动定位并展开所在目录链
 - 过滤框支持模糊匹配，结果用**扁平列表**
 - 分隔线可拖动，宽度记在 `localStorage`
+
+### 顶栏的发布标签
+
+顶栏短 sha 后面会显示**指向该提交的 tag**（绿色徽章），一眼能看出这个变更集对应哪个发布版本。没有 tag 时整块隐藏、不占宽度。
+
+```
+File Tree  jm_java  cf45749  [0.1.0.7-BETA] [0.1.0.8-BETA]        …  1129 个文件
+```
+
+- 轻量 tag：绿色描边
+- annotated tag：绿色实色填充（表示带说明和 tagger 信息）
+- 超过 3 个时折叠成 `+N`，hover 显示完整列表
+- hover 单个徽章有 tooltip 说明类型
+
+**实现要点**
+
+```bash
+git for-each-ref --points-at=<commit> --format=%(refname)%00%(objecttype)%00%(refname:short)
+```
+
+**必须用 `--points-at`，不能自己比较 sha**。annotated tag 的对象类型是 `tag`（tag object → commit），轻量 tag 是 `commit`。如果拿 tag 对象的 sha 去和 commit sha 比，annotated tag 会全部漏掉。`--points-at` 内部会正确处理解引用。
+
+实测性能 9–19ms，所以打开页面时直接查，不需要缓存。
+
+**为什么不合并进 `/tree` 接口**：树接口要传 1.8 万个文件（约 160ms），refs 只要 10ms。合并会让「已能显示树」被「查 tag」拖慢。所以分成独立请求并行发，而且 tag 查询失败不影响树（静默不显示）。
+
+**接口**：`GET /api/repos/:id/refs-at?sha=&wt=` → `{ sha, tags: [{name, annotated}], branches: [{name, remote}] }`
 
 ### 语法高亮
 
@@ -835,6 +863,7 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── history.mjs         单文件历史（--follow / 改名路径 / numstat -z 解析）
 │   ├── tree.mjs            完整文件树（ls-tree -r -l -z / 文件内容读取）
 │   ├── grep.mjs            在 commit 快照里按内容搜索（git grep -z 解析）
+│   ├── refs.mjs            查 commit 上指向它的 tag / 分支（for-each-ref --points-at）
 │   └── config.mjs          配置加载
 └── public\
     ├── index.html          单页骨架
@@ -942,6 +971,7 @@ cp config.example.json config.json
 | `GET /api/repos/:id/tree` | `?sha=&wt=` 某提交的完整文件树（sha 会解析成完整值） |
 | `GET /api/repos/:id/file-content` | `?sha=&path=&wt=` 某提交里某文件的内容（二进制/超大文件单独标记） |
 | `GET /api/repos/:id/grep` | `?sha=&q=&path=&i=1&re=1` 在提交快照里按内容搜索（git grep） |
+| `GET /api/repos/:id/refs-at` | `?sha=&wt=` 该提交上的 tag 与分支（annotated 会标记） |
 | `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
 | `checkout` | `{wt, branch?, detachAt?, create?, startPoint?}` | 切换分支；`detachAt` 可传 tag 名（后端写成 `refs/tags/<tag>` 消除歧义）/ 分支名 / sha |
 | `worktrees` | `{path, branch, mode:'new'\|'existing'\|'remote'\|'tag'\|'detach', base?, lock?}` | 创建；`mode:'tag'` 时 `base` 为 tag 名，`branch` 非空则同时建分支 |
@@ -1046,6 +1076,10 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | 搜索词含 `$(` `[` 等正则元字符 | 默认按字面量（`-F`），不会报错；需要正则时勾选 |
 | 搜索命中过多（>2000 处） | 截断并标记「已截断」，避免宽正则刷爆内存 |
 | 中文路径的搜索结果 | `core.quotepath=false`，路径原样返回，可直接用于打开文件 |
+| 提交上没有 tag | 徽章整块隐藏，不留空白 |
+| annotated tag | 用 `--points-at` 识别（不是比较 sha），实色填充区分于轻量 tag |
+| 一个提交带多个 tag | 显示前 3 个，其余折叠成 `+N`（hover 看全部） |
+| 短 sha 查 tag | 接口内部 `rev-parse` 解析，传 `7fc0607` 也能用 |
 | 文件树里搜同名文件 | 文件名精确/前缀命中优先于路径模糊分；过滤结果行内显示所在目录 |
 | 每级只有一个子目录的长链 | 默认合并成一行（`com/mysoft/jmpt`），长链中间省略为 `src/…/common` |
 | 目录既有文件又有唯一子目录 | 不合并（那是「真目录」），只合并其下的纯目录链 |
@@ -1121,6 +1155,9 @@ node test-highlight.mjs
 
 # 纯逻辑：URL 链接化（37 项，含协议白名单/中文标点边界）
 node test-linkify.mjs
+
+# UI：顶栏发布标签（28 项）
+node test-ui-tags.mjs
 
 # UI：内容搜索（40 项，含接口与页面）
 node test-ui-grep.mjs

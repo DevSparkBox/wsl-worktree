@@ -773,6 +773,53 @@ $('t-btn-copy-path').addEventListener('click', async () => {
   }
 })
 
+/**
+ * 加载并渲染该 commit 上的 tag。
+ *
+ * 为什么单独请求而不塞进 /tree 接口：
+ * 打开文件树时树接口要传 1.8 万个文件（约 160ms），而 refs 只要 10ms。
+ * 合并会让「已能显示树」被「查 tag」拖慢；分开则可以并行，且 tag 失败也不影响树。
+ */
+async function loadRefs(commitSha) {
+  const box = $('t-tags')
+  box.replaceChildren()
+  const params = new URLSearchParams({ sha: commitSha })
+  if (wtPath) params.set('wt', wtPath)
+  try {
+    const data = await api(`/api/repos/${repoId}/refs-at?${params}`)
+    const tags = data.tags || []
+    if (!tags.length) {
+      box.hidden = true
+      return
+    }
+    // 标签多时（比如一次打了好几个 tag）只显示前 3 个，其余折叠成 +N
+    const MAX = 3
+    const shown = tags.slice(0, MAX)
+    const frag = document.createDocumentFragment()
+    for (const t of shown) {
+      const el = document.createElement('span')
+      el.className = 't-tag' + (t.annotated ? ' t-tag-ann' : '')
+      el.textContent = t.name
+      el.title = t.annotated
+        ? `annotated tag：${t.name}（带说明与打 tag 信息）`
+        : `轻量 tag：${t.name}`
+      frag.appendChild(el)
+    }
+    if (tags.length > MAX) {
+      const more = document.createElement('span')
+      more.className = 't-tag t-tag-more'
+      more.textContent = `+${tags.length - MAX}`
+      more.title = tags.map((t) => t.name).join('\n')
+      frag.appendChild(more)
+    }
+    box.replaceChildren(frag)
+    box.hidden = false
+  } catch {
+    // 查不到 tag 不是错误，静默不显示即可
+    box.hidden = true
+  }
+}
+
 // ---------- 初始化 ----------
 async function init() {
   if (!repoId) {
@@ -807,6 +854,11 @@ async function init() {
   $('t-tree').innerHTML = '<div class="t-empty">加载文件树…</div>'
   const params = new URLSearchParams({ sha })
   if (wtPath) params.set('wt', wtPath)
+
+  // tag 查询和树加载并行：两者互不依赖，树要 160ms、refs 只要 10ms，
+  // 串行会让 tag 白等。tag 失败不影响树，所以不 await 它。
+  loadRefs(sha)
+
   try {
     const data = await api(`/api/repos/${repoId}/tree?${params}`)
     state.files = data.files || []
