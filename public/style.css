@@ -99,6 +99,10 @@ body {
   border-radius: 5px;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s;
+  /* 不换行：顶栏空间紧张时，flex 会把按钮压到「最宽单字」的宽度，
+     结果「更新仓库」变成竖排的「更新仓/库」。让它保持一行，
+     把收缩的活交给旁边的 .hint（它有 ellipsis）。 */
+  white-space: nowrap;
 }
 .btn:hover { background: var(--bg-hover); border-color: var(--text-faint); }
 .btn:active { background: var(--bg-active); }
@@ -533,7 +537,9 @@ body.resizing * { cursor: col-resize !important; }
 .ref-tag {
   font: 10px/1.6 var(--mono);
   padding: 0 4px;
-  margin-left: 3px;
+  /* 标签现在排在摘要文本「前面」，所以间距放在右侧。
+     用 margin-left 会让第一个标签距单元格左边多出 3px 空白。 */
+  margin-right: 3px;
   border-radius: 3px;
   background: var(--purple-soft);
   color: var(--purple);
@@ -1136,4 +1142,42 @@ body.resizing * { cursor: col-resize !important; }
 .seg.disabled {
   opacity: .55;
   pointer-events: none;
+}
+
+/* ---------- 顶栏空间分配：按钮不缩，标题/路径缩 ---------- */
+/* 不加这条时，flex 会按比例压缩所有子项，按钮被压窄后文字换行成竖排。
+   显式声明：按钮不参与收缩，仓库名和路径可以被截断（它们有 ellipsis）。 */
+.pane-head > .btn { flex: none; }
+.pane-head > .panel-toggles { flex: none; }
+
+/* 仓库名太长时截断，别去挤按钮 */
+.pane-head strong {
+  max-width: 34%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 路径：优先被压缩的那个（min-width:0 让它能缩到 0 而不是撑住） */
+.pane-head .hint {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* ---------- dirty 冲突时的强制切换出口 ---------- */
+.co-force-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.co-force-hint {
+  margin: 0;
+  color: var(--text-faint);
+}
+
+/* 已「上膛」等待二次确认：加一圈醒目描边，提示这次点击真的会执行 */
+.btn.danger.armed {
+  box-shadow: 0 0 0 3px var(--red-soft);
+  background: #a51f1f;
 }

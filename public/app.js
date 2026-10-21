@@ -419,7 +419,7 @@ function renderLog() {
       <td><span class="sha" title="${c.sha}">${c.sha.slice(0, 7)}</span></td>
       <td class="time" title="${fmtTime(c.time)}">${relTime(c.time)}</td>
       <td class="author" title="${esc(c.email)}">${esc(c.author)}</td>
-      <td class="subject" title="${esc(c.subject)}">${linkify(c.subject)}${refsHtml ? ' ' + refsHtml : ''}</td>`
+      <td class="subject" title="${esc(c.subject)}">${refsHtml ? refsHtml + ' ' : ''}${linkify(c.subject)}</td>`
     frag.appendChild(tr)
   }
   body.replaceChildren(frag)
@@ -1061,6 +1061,73 @@ async function openPullDialog(wt) {
   })
 }
 
+/**
+ * dirty 冲突时的出口：告知会丢什么，并允许「放弃本地改动强制切换」。
+ *
+ * 用二次点击（arm）而不是直接执行：切分支丢改动不可撤销，一次误点的代价太大。
+ * 5 秒内没有第二次点击就自动复位，避免长期停在「待确认」状态下被误触。
+ */
+function renderDirtyConflict(r, container, runCheckout) {
+  const files = Array.isArray(r.dirtyFiles) ? r.dirtyFiles : []
+  const CODE_LABEL = {
+    M: '修改', A: '新增', D: '删除', R: '重命名', C: '复制', U: '冲突', T: '类型变更', '?': '未跟踪',
+  }
+  const fileLines = files.map((f) => {
+    const c = (f.code || '').trim()
+    const label = CODE_LABEL[c[0]] || c || '改动'
+    return `${esc(f.path)}   ${esc(label)}`
+  }).join('\n')
+
+  container.innerHTML = `
+    <div class="note danger">
+      工作区有 <strong>${files.length}</strong> 个文件有未提交的改动，直接切换会被它们挡住。
+      强制切换会<strong>丢弃这些改动，且无法恢复</strong>。
+      如果要保留，请先提交或 <code>git stash</code>。
+    </div>
+    ${files.length ? `
+      <div class="field">
+        <label>会被丢弃的改动（共 ${files.length} 个文件）</label>
+        <div class="filelist">${fileLines}</div>
+      </div>` : ''}
+    <div class="field co-force-row">
+      <button class="btn danger" id="co-force">放弃这些改动并切换</button>
+      <span class="hintline co-force-hint">需要点击两次确认</span>
+    </div>`
+
+  const btn = container.querySelector('#co-force')
+  let armed = false
+  let timer = null
+
+  const disarm = () => {
+    armed = false
+    clearTimeout(timer)
+    timer = null
+    btn.textContent = '放弃这些改动并切换'
+    btn.classList.remove('armed')
+  }
+
+  btn.addEventListener('click', async () => {
+    if (btn.disabled) return
+    if (!armed) {
+      armed = true
+      btn.textContent = '确认放弃改动？再点一次'
+      btn.classList.add('armed')
+      timer = setTimeout(disarm, 5000)
+      return
+    }
+    disarm()
+    btn.disabled = true
+    const rr = await runCheckout(btn, true)
+    if (rr === 'ok') {
+      closeModal(true)
+      return
+    }
+    btn.disabled = false
+    container.insertAdjacentHTML('beforeend',
+      `<div class="note danger" style="margin-top:8px">强制切换仍然失败：${esc((rr.error || '').slice(0, 600))}</div>`)
+  })
+}
+
 async function openCheckoutDialog(wt) {
   const body = document.createElement('div')
   body.innerHTML = `
@@ -1158,6 +1225,33 @@ async function openCheckoutDialog(wt) {
     addGroup('远程分支', remotes)
   }
 
+  /**
+   * 执行一次切换。
+   * @param force true 时带 force:true，后端会 `checkout -f` 丢弃本地改动
+   * @returns 'ok' | 失败结果对象
+   */
+  const runCheckout = async (btn, force) => {
+    const detach = body.querySelector('#co-detach').value.trim()
+    // tag 一律走 detachAt（detached 检出）；分支走 branch
+    const payload = detach
+      ? { wt: wt.path, detachAt: detach }
+      : pickedKind === 'tag'
+        ? { wt: wt.path, detachAt: picked }
+        : { wt: wt.path, branch: picked }
+    if (force) payload.force = true
+
+    setBusy(btn, true, force ? '强制切换中…' : '切换中…')
+    const r = await act('checkout', payload)
+    setBusy(btn, false)
+    await refreshAfterWrite()
+
+    if (r.ok) {
+      toast(r.branch === 'HEAD' ? '已 detached 检出' : `已切到 ${r.branch}`)
+      return 'ok'
+    }
+    return r
+  }
+
   await openModal({
     title: '切换分支',
     body,
@@ -1174,28 +1268,25 @@ async function openCheckoutDialog(wt) {
             body.querySelector('#co-result').innerHTML = '<div class="note warn">请选择分支 / tag，或填写提交</div>'
             return false
           }
-          setBusy(btn, true, '切换中…')
-          // tag 一律走 detachAt（detached 检出）；分支走 branch
-          const payload = detach
-            ? { wt: wt.path, detachAt: detach }
-            : pickedKind === 'tag'
-              ? { wt: wt.path, detachAt: picked }
-              : { wt: wt.path, branch: picked }
-          const r = await act('checkout', payload)
-          setBusy(btn, false)
-          await refreshAfterWrite()
 
-          if (r.ok) {
-            toast(r.branch === 'HEAD' ? `已 detached 检出` : `已切到 ${r.branch}`)
-            return true
+          const r = await runCheckout(btn, false)
+          if (r === 'ok') return true
+
+          const result = body.querySelector('#co-result')
+
+          // 本地有未提交改动：给「强制切换（放弃本地变更）」的出口。
+          // 这是破坏性操作，所以要把「会丢哪些文件」明确列出来，并且要求二次点击确认。
+          if (r.reason === 'dirty-conflict') {
+            renderDirtyConflict(r, result, runCheckout)
+            return false
           }
+
           const reasonText = {
             'branch-in-use': `该分支已被别的 worktree 占用：<code>${esc(r.ownerPath || '')}</code>。要到那个 worktree 里去用，或先删掉它。`,
-            'dirty-conflict': '工作区有改动会被覆盖。请先提交或 stash。',
             'ref-not-found': '找不到这个 tag / 分支 / 提交。',
             failed: '切换失败',
           }[r.reason] || '切换失败'
-          body.querySelector('#co-result').innerHTML =
+          result.innerHTML =
             `<div class="note danger">${reasonText}</div>` +
             (r.error ? `<div class="filelist">${esc(r.error.slice(-1500))}</div>` : '')
           return false
@@ -1206,7 +1297,9 @@ async function openCheckoutDialog(wt) {
       const listBox = body.querySelector('#co-list')
       listBox.innerHTML = '<div class="empty" style="padding:14px">加载分支…</div>'
       try {
-        const data = await api(`/api/repos/${state.repo.id}/branches`)
+        // 带上 wt：让「当前分支」标的是这个 worktree 的，而不是主工作树的。
+        // 主工作树 detached 时，不传就完全看不出当前在哪。
+        const data = await api(`/api/repos/${state.repo.id}/branches?wt=${encodeURIComponent(wt.path)}`)
         branches = { local: data.local || [], remote: data.remote || [], tags: data.tags || [] }
         renderList()
       } catch (err) {

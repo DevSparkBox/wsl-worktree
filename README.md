@@ -81,6 +81,34 @@ if (e.target.closest('a.ext-link')) return
 - 监听 `hashchange`：手改地址栏 hash 或从收藏夹进入时也会切换。
 - 左侧列表、顶栏切换器、hashchange 三个入口最终都走 `selectRepo`，写入逻辑只在这一处，不会出现某个入口忘记记录。
 
+### 窄宽度下的排版
+
+窗口变窄时有两处容易出问题，都已处理：
+
+**① 顶栏按钮不能换行**
+
+`flex` 容器空间不足时会按比例压缩所有子项。按钮被压到「最宽单字」的宽度后，`更新仓库` 会变成竖排的「更新仓 / 库」。
+
+```css
+.btn { white-space: nowrap; }          /* 文字不换行 */
+.pane-head > .btn { flex: none; }      /* 按钮不参与收缩 */
+```
+
+收缩的活交给旁边的 `.hint`（仓库路径）——它本来就有 `overflow: hidden` + `text-overflow: ellipsis`。仓库名过长时也截断（`max-width: 34%`），让位给按钮。
+
+实测 1440 / 1200 / 1100 三个宽度下三个按钮都是单行（`rows: 1`）。
+
+**② 日志表的 ref 标签要放在摘要文本「前面」**
+
+```
+改前： 修复登录超时问题  [origin/h-tag-5.5.13.11]      ← 窄列时被 ellipsis 吃掉
+改后： [origin/h-tag-5.5.13.11]  修复登录超时问题
+```
+
+`subject` 单元格是 `white-space: nowrap` + `text-overflow: ellipsis`，标签放在后面时一旦超宽就被截断，用户看不到当前在哪个分支/tag 上。放前面能保证它始终可见。
+
+顺带：`.ref-tag` 的间距从 `margin-left` 改成 `margin-right`——标签现在总在开头，左边距会让它距单元格边缘多出 3px 空白。
+
 ### 左栏收起后的仓库切换器
 
 左栏一收起，仓库列表这个唯一入口就没了。所以此时顶栏会出现一个仓库切换器（`#top-repo`），位置在 logo 右侧：
@@ -134,6 +162,38 @@ if (e.target.closest('a.ext-link')) return
 | 语法高亮 | 文件内容按语言上色（TS/JS/Java/Vue/LESS/MD/SQL/XML 等），可开关 |
 | 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
 | 键盘 | `r` 刷新，`/` 聚焦仓库搜索（左栏收起时聚焦顶栏切换器），`[` `]` 开关左右面板 |
+
+#### 切换分支遇到本地改动：给「放弃本地变更」的出口
+
+`git checkout` 在工作区有改动、且目标分支会覆盖这些文件时会直接失败。原本只提示「请先提交或 stash」，没有别的办法，用户只能去终端。
+
+现在的处理：**列出会被丢弃的文件 + 提供强制切换按钮，但要求点两次**。
+
+```
+工作区有 1 个文件有未提交的改动，直接切换会被它们挡住。
+强制切换会丢弃这些改动，且无法恢复。如果要保留，请先提交或 git stash。
+
+会被丢弃的改动（共 1 个文件）
+  .gitignore   修改
+
+[放弃这些改动并切换]   需要点击两次确认
+```
+
+- 第一次点击 → 按钮变成「确认放弃改动？再点一次」并加红色描边（armed）
+- 5 秒内没再点就自动复位，避免长期停在「待确认」被误触
+- 后端 `checkoutBranch(..., { force: true })` 会在参数里插 `-f`
+
+**`-f` 的边界**（实测确认）：丢弃工作区**和暂存区**的改动，但**不删未跟踪文件**。
+
+```
+force 切换后：
+  f.txt        → 变成目标分支的内容（本地改动丢失）
+  newfile.txt  → 仍然存在（未跟踪，不受影响）
+```
+
+**告知的文件列表**取的是当前所有未提交改动（`git status --porcelain=v1 -z`），不完全是 git 拒绝覆盖的那几个。对「放弃本地变更」这个语义来说，用户需要知道的正是这些。
+
+**为什么要求点两次**：切分支丢改动不可撤销，一次误点的代价太大。这比嵌套一个确认弹窗更轻，也比「点一次就丢」安全。
 
 ### 写操作
 
@@ -985,7 +1045,14 @@ cp config.example.json config.json
 | `GET /api/repos/:id/log?rev=&skip=&count=&wt=` | 提交日志，`wt` 指定在哪个 worktree 里执行 |
 | `GET /api/repos/:id/commit/:sha` | commit 的文件清单 |
 | `GET /api/repos/:id/diff?sha=&path=&mode=` | 单文件 patch |
-| `GET /api/repos/:id/branches` | 本地 + 远程分支 + tag（含被哪个 worktree 占用） |
+| `GET /api/repos/:id/branches[?wt=]` | 本地 + 远程分支 + tag；传 `wt` 时「当前分支」按该 worktree 算，不传则按主工作树 |
+| `GET /api/repos/:id/file-history?path=&wt=&follow=0&rev=` | 单文件历史（含 pathAtCommit / 增删统计 / 改名信息） |
+| `GET /api/repos/:id/file-history-diff?sha=&path=&wt=` | 某个 commit 里该文件的 diff（path 必须是当时的路径） |
+| `GET /api/repos/:id/tree?sha=&wt=` | 某提交的完整文件树（sha 会解析成完整值） |
+| `GET /api/repos/:id/file-content?sha=&path=&wt=` | 某提交里某文件的内容（二进制/超大文件单独标记） |
+| `GET /api/repos/:id/grep?sha=&q=&path=&i=1&re=1` | 在提交快照里按内容搜索（git grep） |
+| `GET /api/repos/:id/refs-at?sha=&wt=` | 该提交上的 tag 与分支（annotated 会标记） |
+| `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
 | `POST /api/open` | `{target:'explorer'\|'wt', path}` 打开 Windows 程序 |
 
 写操作（全部 `POST`，路径前缀 `/api/repos/:id/`）：
@@ -995,14 +1062,7 @@ cp config.example.json config.json
 | `fetch` | `{prune?:bool, forceTags?:bool}` | 更新仓库所有远程；`forceTags` 才会覆盖被重打的 tag |
 | `tag-inspect` | `{tag}` | 查某 tag 的本地/远端 sha（冲突时用于展示）|
 | `pull` | `{wt, mode:'ff-only'\|'rebase'\|'merge'}` | 更新某个 worktree 的分支；返回 `changed` / `incoming` / `before` / `after` 供界面区分「已是最新」 |
-| `GET /api/repos/:id/file-history` | `?path=&wt=&follow=0&rev=` 单文件历史（含 pathAtCommit / 增删统计 / 改名信息） |
-| `GET /api/repos/:id/file-history-diff` | `?sha=&path=&wt=` 某个 commit 里该文件的 diff（path 必须是当时的路径） |
-| `GET /api/repos/:id/tree` | `?sha=&wt=` 某提交的完整文件树（sha 会解析成完整值） |
-| `GET /api/repos/:id/file-content` | `?sha=&path=&wt=` 某提交里某文件的内容（二进制/超大文件单独标记） |
-| `GET /api/repos/:id/grep` | `?sha=&q=&path=&i=1&re=1` 在提交快照里按内容搜索（git grep） |
-| `GET /api/repos/:id/refs-at` | `?sha=&wt=` 该提交上的 tag 与分支（annotated 会标记） |
-| `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
-| `checkout` | `{wt, branch?, detachAt?, create?, startPoint?}` | 切换分支；`detachAt` 可传 tag 名（后端写成 `refs/tags/<tag>` 消除歧义）/ 分支名 / sha |
+| `checkout` | `{wt, branch?, detachAt?, create?, startPoint?, force?}` | 切换分支；`detachAt` 可传 tag 名（后端写成 `refs/tags/<tag>` 消除歧义）/ 分支名 / sha；`force:true` 会 `checkout -f` 丢弃本地改动 |
 | `worktrees` | `{path, branch, mode:'new'\|'existing'\|'remote'\|'tag'\|'detach', base?, lock?}` | 创建；`mode:'tag'` 时 `base` 为 tag 名，`branch` 非空则同时建分支 |
 | `worktree-preflight` | `{path}` | 删除前预检（只读） |
 | `worktree-remove` | `{path, force?}` | 删除 |
@@ -1082,6 +1142,10 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | 分支被占用 | 切换/创建时明确报错并指出占用它的 worktree |
 | 分支无 upstream | 拉取时提示 `no-upstream`，不静默失败 |
 | 拉取时已经是最新 | 文案明确「已经是最新」，主按钮退成「关闭」不再高亮，避免误以为没成功 |
+| 切分支时本地有改动 | 列出会丢的文件，提供「放弃这些改动并切换」，需点两次确认；`-f` 不动未跟踪文件 |
+| 窗口变窄 | 顶栏按钮不换行（nowrap + flex:none），收缩交给仓库路径做省略 |
+| 日志摘要很长 | ref 标签排在文本前面，不会被 ellipsis 吃掉 |
+| 主工作树 detached | 切分支对话框仍能标出目标 worktree 自己的当前分支（`branches?wt=`） |
 | 本地远程已分叉 | `--ff-only` 报 `diverged`，可改用变基 |
 | 认证失败 | 提示"在终端里执行一次 fetch 以缓存凭据" |
 | 远端重打了 tag | **不算失败**：分支照常更新，对话框列出冲突 tag 的本地/远端 sha，默认保留本地 |
@@ -1191,6 +1255,12 @@ node test-ui-tags.mjs
 
 # UI：更新分支对话框按钮退场（20 项）
 node test-ui-pull-dialog.mjs
+
+# UI：顶栏/日志表窄宽度排版（16 项）
+node test-ui-toolbar.mjs
+
+# UI：切换分支遇到本地改动的强制切换出口（20 项）
+node test-ui-checkout-dirty.mjs
 
 # UI：内容搜索（40 项，含接口与页面）
 node test-ui-grep.mjs

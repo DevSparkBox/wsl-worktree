@@ -35,9 +35,18 @@ check('路径不带 <sha>: 前缀', !String(r.body.files?.[0]?.path).includes(':
 check('内容不含下一条记录', !/\n[a-f0-9]{40}:/i.test(r.body.files?.[0]?.hits?.[0]?.text || ''),
   JSON.stringify(r.body.files?.[0]?.hits?.[0]?.text)?.slice(0, 60))
 
-// 与命令行结果一致（TODO 之前手工测是 390 处）
+// 与命令行结果交叉验证（不写死数字：仓库内容会变，390 这种硬编码必然过时）
+const { execFileSync } = await import('node:child_process')
+const cliCount = (() => {
+  try {
+    const out = execFileSync('wsl.exe', ['-e', 'bash', '-lc',
+      `cd "${REPO}" && git grep -I -e TODO HEAD | wc -l`], { encoding: 'utf8' })
+    return Number(out.trim())
+  } catch { return null }
+})()
 r = await get(`?sha=HEAD&q=TODO`)
-check('TODO 命中数与命令行一致', r.body.total === 390, `${r.body.total} 处（期望 390）`)
+check('TODO 命中数与 git grep 命令行一致', cliCount != null && r.body.total === cliCount,
+  `API ${r.body.total} vs 命令行 ${cliCount}`)
 check('多文件命中', r.body.files?.length > 10, `${r.body.files?.length} 个文件`)
 
 // 无命中

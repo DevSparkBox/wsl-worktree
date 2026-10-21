@@ -462,6 +462,8 @@ const server = createServer(async (req, res) => {
             detachAt: body.detachAt,
             create: body.create,
             startPoint: body.startPoint,
+            // 只有前端明确确认「放弃本地变更」时才为 true
+            force: body.force === true,
           })
         }
         // 创建 worktree
@@ -509,7 +511,15 @@ const server = createServer(async (req, res) => {
     const mBranches = p.match(/^\/api\/repos\/([^/]+)\/branches$/)
     if (mBranches) {
       const toplevel = dec(mBranches[1])
-      const data = await ops.listBranches(toplevel)
+      // wt 可选：传了就以该 worktree 为视角算「当前分支」，
+      // 这样主工作树 detached 时，别的工作树仍能正确标出自己的当前分支。
+      const wtPath = url.searchParams.get('wt')
+      let wt = null
+      if (wtPath) {
+        wt = await resolveWorktree(toplevel, wtPath)
+        if (!wt) return json(res, 400, { error: 'unknown worktree', local: [], remote: [], tags: [] })
+      }
+      const data = await ops.listBranches(toplevel, { wtPath: wt?.path })
       return json(res, 200, data)
     }
 

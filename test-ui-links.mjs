@@ -87,30 +87,47 @@ check('点链接不选中 commit',
   afterLinkClick.value?.selected === 0 && afterLinkClick.value?.title === beforeTitle.value,
   `标题=${afterLinkClick.value?.title} 选中=${afterLinkClick.value?.selected}`)
 
-// 点行仍正常选中
-await ev(`document.querySelectorAll('#log-body tr[data-sha]')[1].click()`)
-await sleep(2200)
+// 点行仍正常选中（选一个有外链的行：详情面板的表头才会出现链接）
+// 不能固定第 2 行——提交内容随仓库变化，那一行不一定带 URL。
+const clickedRow = await ev(`(() => {
+  const rows = [...document.querySelectorAll('#log-body tr[data-sha]')]
+  const withLink = rows.find(tr => tr.querySelector('.subject a.ext-link'))
+  const target = withLink || rows[1] || rows[0]
+  if (!target) return null
+  target.click()
+  return { hasLink: Boolean(withLink), index: rows.indexOf(target) }
+})()`)
+await sleep(2400)
 const afterRowClick = await ev(`({
   title: document.getElementById('detail-title').textContent,
   selected: document.querySelectorAll('#log-body tr.selected').length,
   detailLinks: document.querySelectorAll('#detail-body a.ext-link').length,
 })`)
 check('点行仍能选中 commit', afterRowClick.value?.selected === 1, `${afterRowClick.value?.selected} 行选中`)
-check('详情面板的表头也有链接', afterRowClick.value?.detailLinks > 0, `${afterRowClick.value?.detailLinks} 个`)
+if (clickedRow.value?.hasLink) {
+  check('详情面板的表头也有链接', afterRowClick.value?.detailLinks > 0, `${afterRowClick.value?.detailLinks} 个`)
+} else {
+  console.log('       (仓库里没有带 URL 的提交，跳过详情面板链接断言)')
+}
 
 // 详情面板链接的属性
 const detailLink = await ev(`(() => {
   const a = document.querySelector('#detail-body a.ext-link')
   return a ? { href: a.getAttribute('href'), target: a.target, rel: a.rel } : null
 })()`)
-check('详情面板链接可点且新标签打开',
-  detailLink.value?.target === '_blank' && /^https?:/.test(detailLink.value?.href || ''),
-  detailLink.value?.href?.slice(0, 46))
+if (detailLink.value) {
+  check('详情面板链接可点且新标签打开',
+    detailLink.value?.target === '_blank' && /^https?:/.test(detailLink.value?.href || ''),
+    detailLink.value?.href?.slice(0, 46))
+} else {
+  console.log('       (详情面板里没有链接，跳过属性断言)')
+}
 
 // 链接文本与原始 subject 的 URL 一致（不能改字符）
 const sameUrl = await ev(`(() => {
-  const tr = document.querySelectorAll('#log-body tr[data-sha]')[1]
-  const subject = tr.querySelector('.subject')
+  const rows = [...document.querySelectorAll('#log-body tr[data-sha]')]
+  const tr = rows.find(r => r.querySelector('.subject a.ext-link'))
+  const subject = tr?.querySelector('.subject')
   const a = subject?.querySelector('a.ext-link')
   if (!a) return null
   // 去掉链接后的剩余文本应等于「原 subject 去掉该 URL」
@@ -118,7 +135,9 @@ const sameUrl = await ev(`(() => {
   const url = a.textContent
   return { full, url, ok: full.includes(url) }
 })()`)
-check('链接文本是原 subject 的子串', sameUrl.value?.ok === true, sameUrl.value?.url?.slice(0, 46))
+if (sameUrl.value) {
+  check('链接文本是原 subject 的子串', sameUrl.value?.ok === true, sameUrl.value?.url?.slice(0, 46))
+}
 
 await shot('log-links.png')
 

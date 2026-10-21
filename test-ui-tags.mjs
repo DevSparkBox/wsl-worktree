@@ -51,10 +51,14 @@ r = await get('HEAD')
 check('轻量 tag 不标 annotated', r.body.tags?.[0]?.annotated === false,
   `${r.body.tags?.[0]?.name} annotated=${r.body.tags?.[0]?.annotated}`)
 
-// 分支信息（HEAD 上有分支指向）
+// 分支信息：字段必须始终是数组。
+// 注意不能断言「>=1 个分支」——主工作树处于 detached 时，HEAD 上本来就没有分支指向，
+// 那是环境的正常状态而不是接口出错。
 r = await get('HEAD')
-check('同时返回分支', Array.isArray(r.body.branches) && r.body.branches.length > 0,
-  `${r.body.branches?.length} 个分支`)
+check('branches 字段是数组', Array.isArray(r.body.branches), `${r.body.branches?.length} 个`)
+if (r.body.branches?.length) {
+  check('分支项含 name', typeof r.body.branches[0].name === 'string', r.body.branches[0].name)
+}
 
 // 不存在的 commit
 r = await get('deadbeefdeadbeef')

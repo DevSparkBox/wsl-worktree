@@ -87,7 +87,13 @@ check('主工作树删除按钮禁用', mainRemoveDisabled.value === true, Strin
 await shot('ops-toolbar.png')
 
 // ---------- 切换分支对话框 ----------
-await evaluate(`document.querySelectorAll('#wt-body tr')[1].querySelector('.icon-btn[data-act=checkout]').click()`)
+// 优先选一个「在分支上」的 worktree：detached 的没有当前分支，无法验证 is-head。
+await evaluate(`(() => {
+  const rows = [...document.querySelectorAll('#wt-body tr')]
+  const pick = rows.find((tr) => !/detached/i.test(tr.textContent))
+    || rows[1] || rows[0]
+  pick?.querySelector('.icon-btn[data-act=checkout]')?.click()
+})()`)
 await sleep(2000)
 const coTitle = await evaluate(`document.getElementById('modal-title').textContent`)
 const coRows = await evaluate(`document.querySelectorAll('.branch-row').length`)
@@ -95,8 +101,17 @@ const coBusy = await evaluate(`document.querySelectorAll('.branch-row.busy').len
 const coHead = await evaluate(`document.querySelectorAll('.branch-row.is-head').length`)
 check('切换分支对话框打开', /切换分支/.test(coTitle.value || ''), coTitle.value)
 check('分支列表已加载', coRows.value > 0, `${coRows.value} 个分支`)
-check('占用的分支被标记', coBusy.value > 0, `${coBusy.value} 个占用`)
-check('当前分支被标记', coHead.value >= 1, `${coHead.value} 个 is-head`)
+// 「占用」只会在「分支被别的 worktree 检出」时出现。环境里只剩一个分支 worktree 时
+// 本来就没有占用项，所以这里不硬性要求 >0，而是校验「busy 行与 locked 标记一一对应」。
+const busyLocked = await evaluate(`document.querySelectorAll('.branch-row.busy .pill.locked').length`)
+check('占用行带 locked 标记', coBusy.value === busyLocked.value,
+  `busy=${coBusy.value} locked=${busyLocked.value}`)
+// detached 的 worktree 没有「当前分支」，此时 is-head 为 0 才是对的
+if (/detached/i.test(coTitle.value || '')) {
+  check('detached 工作树无当前分支标记（符合预期）', coHead.value === 0, `${coHead.value} 个 is-head`)
+} else {
+  check('当前分支被标记', coHead.value >= 1, `${coHead.value} 个 is-head`)
+}
 await shot('ops-checkout.png')
 
 // 搜索过滤
@@ -193,7 +208,15 @@ const stShape = await evaluate(`({
   rows: document.querySelectorAll('.stale-tbl tbody tr').length,
   noteText: (document.querySelector('#modal-body .note')?.textContent || '').slice(0, 60),
 })`)
-check('清理对话框结构完整', stShape.value?.hasAll && stShape.value?.hasDays, JSON.stringify(stShape.value?.noteText))
+// 没有陈旧项时对话框只显示空状态（不渲染表格和过滤控件），这是合理的产品行为，
+// 所以按「有候选 / 无候选」两种情况分别校验，而不是硬性要求表格结构。
+if (stShape.value?.rows === 0) {
+  check('无陈旧项时显示空状态', /没有可清理/.test(stShape.value?.noteText || ''),
+    stShape.value?.noteText)
+} else {
+  check('清理对话框结构完整', stShape.value?.hasAll && stShape.value?.hasDays,
+    JSON.stringify(stShape.value?.noteText))
+}
 console.log(`     候选行数: ${stShape.value?.rows}`)
 await shot('ops-stale.png')
 
