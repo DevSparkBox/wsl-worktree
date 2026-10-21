@@ -1,13 +1,15 @@
 // ============================================================
 // 文件历史页（独立窗口/标签页）
 // URL: /history.html?repo=<id>&path=<path>&wt=<worktree path>&follow=1
+// 顶栏的文件路径可点击，改成输入框后按路径模糊搜索切换文件。
 // ============================================================
+
+import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
 
 const $ = (id) => document.getElementById(id)
 
 const qs = new URLSearchParams(location.search)
 const repoId = qs.get('repo') || ''
-const filePath = qs.get('path') || ''
 const wtPath = qs.get('wt') || ''
 
 const state = {
@@ -16,6 +18,9 @@ const state = {
   activeSha: null,
   follow: qs.get('follow') !== '0',
   repo: null,
+  filePath: qs.get('path') || '',
+  allFiles: [],      // 仓库全部已跟踪文件（切文件用）
+  filesLoaded: false,
   loadingDiff: false,
 }
 
@@ -100,7 +105,7 @@ function renderList() {
       : ''
     // 路径只在两种情况下显示：改名（要说明 why 路径变了）、或与当前文件名不同。
     // 同一个文件每行都重复一遍长路径没意义，还挤掉 diff 的位置。
-    const pathDiffers = c.pathAtCommit !== filePath
+    const pathDiffers = c.pathAtCommit !== state.filePath
     const showFile = c.rename || pathDiffers
     // 改名只显示差异片段（完整两条长路径截断后看不出差别）
     const fileLabel = c.rename
@@ -289,7 +294,7 @@ async function loadHistory({ keepActive = false } = {}) {
   $('h-diff-stat').innerHTML = ''
   $('h-copy-sha').disabled = true
 
-  const params = new URLSearchParams({ path: filePath })
+  const params = new URLSearchParams({ path: state.filePath })
   if (wtPath) params.set('wt', wtPath)
   if (!state.follow) params.set('follow', '0')
   try {
@@ -401,19 +406,279 @@ document.addEventListener('keydown', (e) => {
   if (row?.scrollIntoView) row.scrollIntoView({ block: 'nearest' })
 })
 
-// ---------- 初始化 ----------
-async function init() {
-  if (!repoId || !filePath) {
-    document.body.innerHTML =
-      '<div class="h-empty" style="padding:40px">缺少参数：需要 repo 和 path。<br>请从主界面的文件行进入。</div>'
+// ============================================================
+// 顶栏文件路径切换器
+// 平时显示为文本，点击变成输入框；输入时按路径模糊匹配前 20 条。
+// ============================================================
+const PATH_LIMIT = 20
+
+/** 把当前文件路径同步到顶栏和文档标题、URL */
+function syncPathUI() {
+  const el = $('h-path-text')
+  el.textContent = state.filePath
+  el.style.color = ''   // 清掉「搜索文件…」占位时的灰色
+  $('h-path-btn').title = `${state.filePath}\n（点击切换文件）`
+  document.title = `History · ${state.filePath.split('/').pop()}`
+  // URL 跟着变，这样切完文件可以直接收藏/分享
+  const u = new URL(location.href)
+  u.searchParams.set('path', state.filePath)
+  history.replaceState(null, '', u)
+}
+
+/** 懒加载仓库全部文件（第一次点开切换器时才取，避免白等 18k 文件的请求） */
+async function ensureFiles() {
+  if (state.filesLoaded) return state.allFiles
+  try {
+    const data = await api(`/api/repos/${repoId}/files`)
+    state.allFiles = data.files || []
+    state.filesLoaded = true
+  } catch {
+    state.allFiles = []
+  }
+  return state.allFiles
+}
+
+let pathAC = null
+
+/** 打开输入框并聚焦（主界面点「文件历史」时也是走这里） */
+async function openPathInput({ selectAll = true } = {}) {
+  const btn = $('h-path-btn')
+  const input = $('h-path-input')
+  btn.hidden = true
+  input.hidden = false
+  // 输入框里放当前路径作为起点，方便「基于当前路径改几个字符」
+  input.value = state.filePath || ''
+  input.focus()
+  if (selectAll && state.filePath) requestAnimationFrame(() => input.select())
+
+  // 首次打开时把全部文件取回来（18k 文件的 ls-files 也就几十毫秒），
+  // 之后输入就有即时候选
+  await ensureFiles()
+}
+
+function closePathInput() {
+  const btn = $('h-path-btn')
+  const input = $('h-path-input')
+  if (input.hidden) return
+  input.hidden = true
+  btn.hidden = false
+  // 输入框内容始终清空：它显示的是「查询词」，不是当前路径。
+  // 当前路径由 #h-path-text 负责显示，两者不该混在一起。
+  input.value = ''
+  if (pathAC) pathAC.close()
+}
+
+/** 切换到另一个文件：重载历史 */
+async function switchToFile(path) {
+  if (!path) return
+  const changed = path !== state.filePath
+  closePathInput()   // 内部已清空输入框
+  if (!changed) {
+    // 同一个文件：只把输入框收起来，不重新请求
+    syncPathUI()
     return
   }
-  $('h-path').textContent = filePath
-  $('h-path').title = filePath
+  state.filePath = path
+  syncPathUI()
+  await loadHistory()
+}
+
+/**
+ * 历史页专用的轻量自动完成。
+ * 不复用主界面那个（在 app.js 里、没导出），这里只需要「输入→列候选→上下键→回车选中」，
+ * 外加把命中字符高亮，实现约 60 行，比把通用组件搬过来更省事。
+ */
+function attachHistoryAutocomplete(input, opt) {
+  const panel = document.createElement('div')
+  panel.className = 'h-ac-panel'
+  panel.hidden = true
+  document.body.appendChild(panel)
+
+  let items = []
+  let active = 0
+  let suppress = false
+
+  const close = () => { panel.hidden = true; active = 0 }
+  const isOpen = () => !panel.hidden
+
+  const place = () => {
+    const r = input.getBoundingClientRect()
+    panel.style.left = `${Math.round(r.left)}px`
+    panel.style.top = `${Math.round(r.bottom + 2)}px`
+    // 宽度跟输入框对齐；内容更长时由 CSS 的 max-width + 自适应撑开
+    panel.style.width = `${Math.round(Math.max(r.width, 340))}px`
+  }
+
+  /** 高亮命中的字符（按子序列标记，和模糊匹配的口径一致） */
+  const highlight = (text, query) => {
+    const q = String(query || '').trim().toLowerCase()
+    if (!q) return esc(text)
+    const t = String(text)
+    const tl = t.toLowerCase()
+    const hit = new Set()
+    let ti = 0
+    for (const ch of q) {
+      const f = tl.indexOf(ch, ti)
+      if (f < 0) break
+      hit.add(f)
+      ti = f + 1
+    }
+    let out = ''
+    for (let i = 0; i < t.length; i++) {
+      out += hit.has(i) ? `<mark>${esc(t[i])}</mark>` : esc(t[i])
+    }
+    return out
+  }
+
+  const render = (list) => {
+    if (!list.length) {
+      panel.innerHTML = `<div class="h-ac-empty">${esc(opt.emptyHint || '无匹配')}</div>`
+      panel.hidden = false
+      place()
+      return
+    }
+    panel.replaceChildren()
+    list.forEach((it, i) => {
+      const row = document.createElement('div')
+      row.className = 'h-ac-item' + (i === active ? ' active' : '')
+      row.dataset.value = it.value
+      row.innerHTML = `<span class="label">${highlight(it.label ?? it.value, input.value)}</span>`
+      row.addEventListener('mousedown', (e) => {
+        // mousedown：click 会先让 input blur 把面板关掉
+        e.preventDefault()
+        pick(it)
+      })
+      panel.appendChild(row)
+    })
+    panel.hidden = false
+    place()
+  }
+
+  const pick = (it) => {
+    suppress = true
+    input.value = it.value
+    suppress = false
+    close()
+    if (opt.onPick) opt.onPick(it)
+  }
+
+  const refresh = () => {
+    if (suppress) return
+    const q = input.value.trim()
+    if (!q) { close(); return }
+    items = opt.getItems() || []
+    // 默认高亮第一条，这样直接回车就能选中
+    active = 0
+    render(items)
+  }
+
+  input.addEventListener('input', refresh)
+  input.addEventListener('focus', () => { if (input.value.trim()) refresh() })
+
+  input.addEventListener('keydown', (e) => {
+    if (!isOpen()) {
+      if (e.key === 'ArrowDown' && input.value.trim()) { e.preventDefault(); refresh() }
+      return
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      active = Math.min(items.length - 1, active + 1)
+      render(items)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      active = Math.max(0, active - 1)
+      render(items)
+    } else if (e.key === 'Enter') {
+      // 有候选时回车选中它；没有候选则交给调用方自行处理（比如按路径直接切）
+      if (items[active]) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        pick(items[active])
+      }
+    } else if (e.key === 'Escape') {
+      // 第一次 Esc 关面板，且不阻止冒泡 —— 让外层的处理顺带把输入框也收起来。
+      // 这样用户按一次 Esc 就回到文本态，不用按两次。
+      if (isOpen()) { e.preventDefault(); close() }
+    }
+  }, true)   // capture：抢在外层 keydown 处理之前
+
+  window.addEventListener('scroll', () => { if (isOpen()) place() }, true)
+  window.addEventListener('resize', () => { if (isOpen()) place() })
+
+  return { close, isOpen }
+}
+
+function initPathPicker() {
+  const btn = $('h-path-btn')
+  const input = $('h-path-input')
+
+  btn.addEventListener('click', () => openPathInput())
+
+  pathAC = attachHistoryAutocomplete(input, {
+    emptyHint: '没有匹配的文件',
+    getItems: () => {
+      const q = input.value.trim()
+      if (!q) return []
+      // 取前 20 条：模糊分排序后截断
+      return rankByFuzzy(q, state.allFiles, PATH_LIMIT).map((p) => ({
+        value: p,
+        // 只显示文件名 + 末两级目录：完整长路径在这里没有信息量
+        label: shortPath(p),
+        raw: p,
+      }))
+    },
+    onPick: (item) => {
+      if (item?.raw) switchToFile(item.raw)
+    },
+  })
+
+  // 键盘补充处理（Escape/Enter 有候选时已被 attachHistoryAutocomplete 的 capture 阶段拦掉，
+  // 这里只处理「没有候选」的情况）
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closePathInput()
+      return
+    }
+    if (e.key === 'Enter') {
+      const v = input.value.trim()
+      if (!v) return
+      e.preventDefault()
+      // 没有候选时：允许直接输入完整路径回车切换，否则取最佳模糊匹配
+      const exact = state.allFiles.includes(v)
+      const best = exact ? v : rankByFuzzy(v, state.allFiles, 1)[0]
+      if (best) switchToFile(best)
+      else toast('没有匹配的文件')
+    }
+  })
+
+  // 失焦收起（延迟，让点击候选先生效）
+  input.addEventListener('blur', () => {
+    setTimeout(() => {
+      if (document.activeElement === input) return
+      closePathInput()
+    }, 160)
+  })
+}
+
+/** 文件路径的短名：末两级 + 文件名，例如 .../intercept/applicationnav/Foo.java */
+function shortPath(p) {
+  const parts = String(p).split('/')
+  if (parts.length <= 2) return p
+  return '…/' + parts.slice(-2).join('/')
+}
+
+// ---------- 初始化 ----------
+async function init() {
+  if (!repoId) {
+    document.body.innerHTML =
+      '<div class="h-empty" style="padding:40px">缺少参数：需要 repo。<br>请从主界面右上角的「文件历史」进入。</div>'
+    return
+  }
   $('h-wt').textContent = shortWt()
   $('h-wt').title = wtPath || ''
   $('h-follow').checked = state.follow
-  document.title = `History · ${filePath.split('/').pop()}`
+  initPathPicker()
 
   // 仓库名：尽量从 /api/repos 里取，失败就显示 id 尾部
   try {
@@ -425,6 +690,32 @@ async function init() {
       $('h-wt').textContent = shortWt()
     }
   } catch {}
+
+  // 没有 path：从右上角按钮进来，先把文件列表准备好，直接让用户输入
+  if (!state.filePath) {
+    await ensureFiles()
+    // 用仓库里第一个文件占位，避免整页空白；用户一输入就会被替换
+    if (state.allFiles.length) {
+      // 不自动选中任何文件，只把提示写在路径框里
+      $('h-path-text').textContent = '搜索文件…'
+      $('h-path-text').style.color = 'var(--text-faint)'
+      $('h-path-btn').title = '点击或直接输入路径搜索文件'
+      document.title = 'History'
+      $('h-list').innerHTML = '<div class="h-empty">在上方输入路径或文件名，选择一个文件查看它的提交历史。</div>'
+      $('h-diff-body').innerHTML = '<div class="h-empty">尚未选择文件。</div>'
+      await openPathInput({ selectAll: false })
+      $('h-path-input').value = ''
+      $('h-path-input').placeholder = '输入路径或文件名，模糊搜索…'
+      return
+    }
+  }
+
+  syncPathUI()
+
+  // 从主界面「文件历史」按钮进来时带了 focus=1，直接把焦点放到路径框
+  if (qs.get('focus') === '1') {
+    await openPathInput()
+  }
 
   await loadHistory()
 }

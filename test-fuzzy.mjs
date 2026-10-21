@@ -1,13 +1,6 @@
-// 从 app.js 抠出 fuzzyScore 单独验证（快，不用开浏览器）
-import { readFileSync } from 'node:fs'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
-
-const HERE = dirname(fileURLToPath(import.meta.url))
-const src = readFileSync(join(HERE, 'public', 'app.js'), 'utf8')
-const start = src.indexOf('function fuzzyScore')
-const end = src.indexOf('\n}\n', src.indexOf('return Math.max(50, 300')) + 3
-const fuzzyScore = new Function(`${src.slice(start, end)}; return fuzzyScore;`)()
+// 直接验证 public/fuzzy.js 的模糊匹配（快，不用开浏览器）
+// 该模块是主界面和历史页共用的实现，替代了原先从 app.js 抠代码的做法。
+import { fuzzyScore, rankByFuzzy } from './public/fuzzy.js'
 
 // 真实分支名（来自用户仓库）
 const branches = [
@@ -79,6 +72,30 @@ console.log('\n===== 边界 =====')
 check('空查询不崩溃', fuzzyScore('', 'anything') === 0, '')
 check('完全相同得最高分', fuzzyScore('v5.5.3.46', 'v5.5.3.46') === 1000, '')
 check('超长查询不匹配', fuzzyScore('x'.repeat(200), 'abc') === null, '')
+
+// ---- rankByFuzzy（历史页的路径搜索用它） ----
+console.log('\n===== rankByFuzzy =====')
+const files = [
+  'backend/src/hotfix/A.java',
+  'backend/src/main/A.java',
+  'frontend/lib/x.ts',
+  'docs/README.md',
+]
+const r1 = rankByFuzzy('hotfix', files)
+check('rankByFuzzy 返回命中项', r1.length === 1, JSON.stringify(r1))
+check('rankByFuzzy 命中正确', r1[0] === 'backend/src/hotfix/A.java', r1[0])
+
+const r2 = rankByFuzzy('', files)
+check('空查询返回空数组', r2.length === 0, `${r2.length} 条`)
+
+const many = Array.from({ length: 50 }, (_, i) => `src/dir${i}/Target.java`)
+const r3 = rankByFuzzy('Target', many, 20)
+check('limit 生效（最多 20）', r3.length === 20, `${r3.length} 条`)
+const r4 = rankByFuzzy('Target', many)
+check('默认 limit 也是 20', r4.length === 20, `${r4.length} 条`)
+
+const r5 = rankByFuzzy('README', files)
+check('按内容匹配到文档', r5[0] === 'docs/README.md', r5[0])
 
 const fail = checks.filter((c) => !c[1])
 console.log(`\n${checks.length - fail.length}/${checks.length} 通过`)

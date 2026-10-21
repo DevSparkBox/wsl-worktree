@@ -18,7 +18,19 @@
     <span>History</span>
   </div>
   <span class="h-repo" id="h-repo"></span>
-  <span class="h-path-wrap"><span class="h-path mono" id="h-path"></span></span>
+
+  <!-- 文件路径：点击变成输入框，按路径模糊匹配切换文件 -->
+  <div class="h-path-box" id="h-path-box">
+    <button class="h-path-btn" id="h-path-btn" title="点击切换文件（支持路径模糊搜索）">
+      <span class="h-path-text mono" id="h-path-text"></span>
+      <svg class="h-path-caret" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+        <path d="M2.5 4L5 6.5 7.5 4" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+    <input class="h-path-input mono" id="h-path-input" placeholder="输入路径或文件名，模糊搜索…"
+           autocomplete="off" spellcheck="false" hidden>
+  </div>
+
   <div class="spacer"></div>
   <label class="h-follow" id="h-follow-wrap" title="跟踪文件改名，把改名前的提交也包含进来">
     <input type="checkbox" id="h-follow" checked>

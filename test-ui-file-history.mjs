@@ -107,11 +107,11 @@ const topBtn = await main.ev(`(() => {
   const b = document.getElementById('btn-file-history')
   return { exists: !!b, hidden: b?.hidden, text: b?.textContent }
 })()`)
-check('顶部有文件历史按钮', topBtn.value?.exists === true, topBtn.value?.text)
-// 选中文件后应显示（openFile 被自动调用加载第一个文件）
+check('右上角有文件历史按钮', topBtn.value?.exists === true, topBtn.value?.text)
+// 现在按钮常驻（不依赖是否选中文件）
 await sleep(600)
 const topBtnShown = await main.ev(`document.getElementById('btn-file-history').hidden`)
-check('选中文件后顶部按钮显示', topBtnShown.value === false, `hidden=${topBtnShown.value}`)
+check('按钮常驻可见（不依赖选中文件）', topBtnShown.value === false, `hidden=${topBtnShown.value}`)
 
 // ---- 3. 点击打开新标签页 ----
 const before = (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).filter((t) => t.type === 'page').length
@@ -164,7 +164,7 @@ if (hist) {
   const layout = await hist.ev(`({
     rows: document.querySelectorAll('#h-list .h-row').length,
     repo: document.getElementById('h-repo').textContent,
-    path: document.getElementById('h-path').textContent,
+    path: document.getElementById('h-path-text').textContent,
     wt: document.getElementById('h-wt').textContent,
     title: document.title,
     hasDiffTable: !!document.querySelector('#h-diff-body .h-patch-table'),

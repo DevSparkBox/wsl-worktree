@@ -25,6 +25,8 @@
   <div class="spacer"></div>
   <div class="stats" id="stats"></div>
   <div class="top-sep"></div>
+  <!-- 右上角：打开文件历史页（焦点直接落在路径输入框） -->
+  <button class="btn sm" id="btn-file-history" title="打开文件历史页，可直接搜索并切换文件">文件历史</button>
   <div class="panel-toggles" role="group" aria-label="面板显示">
     <button class="top-toggle" id="toggle-left" title="显示/隐藏仓库列表  ([)" aria-label="切换左侧面板" aria-pressed="true">
       <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
@@ -115,7 +117,6 @@
       <strong id="detail-title">详情</strong>
       <div class="spacer"></div>
       <span class="hint" id="detail-meta"></span>
-      <button class="btn sm" id="btn-file-history" title="在独立标签页查看当前文件的提交历史" hidden>文件历史</button>
       <button class="icon-btn detail-close" id="detail-close" title="隐藏详情面板 (])">✕</button>
     </div>
     <div class="scroll" id="detail-body">

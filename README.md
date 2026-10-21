@@ -84,7 +84,8 @@
 | 打开位置 | 行内按钮：资源管理器、Windows Terminal |
 | 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
-| 单文件历史 | 文件行 hover 时钟图标，或详情面板顶部「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
+| 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
+| 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
 | 键盘 | `r` 刷新，`/` 聚焦仓库搜索（左栏收起时聚焦顶栏切换器），`[` `]` 开关左右面板 |
 
 ### 写操作
@@ -161,14 +162,31 @@ if (hardFail || (res.code !== 0 && tagConflicts.length === 0)) return { ok: fals
 
 ## 单文件历史（独立标签页）
 
-查一个文件的完整演变过程。入口有两个，指向同一动作：
+查一个文件的完整演变过程。入口有两个，行为略有不同：
 
 | 入口 | 说明 |
 |---|---|
-| 提交详情的文件行 | 行尾时钟图标，**hover 才显形**（不干扰「点整行看 diff」） |
-| 详情面板顶部 | 「文件历史」按钮，选中文件后常驻显示 |
+| 提交详情的文件行 | 行尾时钟图标，**hover 才显形**（不干扰「点整行看 diff」）。直接打开**该文件**的历史 |
+| 顶栏右上角 | 「文件历史」按钮，**常驻可见**（不依赖是否选中文件）。打开历史页并把**焦点放进路径输入框** |
 
-点击后在**新标签页**打开 `/history.html`，左右双栏：左边是提交列表，右边是选中那次的 diff。
+点击后都在**新标签页**打开 `/history.html`，左右双栏：左边是提交列表，右边是选中那次的 diff。
+
+### 顶栏的路径切换器
+
+历史页顶栏显示的文件路径是**可点击的**：点一下变成输入框，输入时按路径模糊匹配（`fuzzyScore`，与主界面同一套），**最多列出 20 条**。
+
+- 候选显示末两级 + 文件名（`…/intercept/applicationnav/Foo.java`），完整长路径在这里没有信息量
+- `↑`/`↓` 选择，`Enter` 切换，`Esc` 一次收起（同时关面板和输入框）
+- 选中后：输入框收起、路径更新、URL 的 `path` 同步、历史列表重新加载
+- 没有高亮候选时按 `Enter`：支持直接贴完整路径，或取最佳模糊匹配
+- 全部文件从 `GET /api/repos/:id/files` 取（18k 文件 `ls-files` 约几十毫秒），首次点开时懒加载
+
+**从右上角按钮进入**（URL 带 `focus=1`）时：
+
+- 若当前已选中文件，就打开那个文件的​历史，同时聚焦路径框方便切走
+- 若还没选文件，路径框显示「搜索文件…」，列表区提示「在上方输入路径或文件名」，不加载任何历史
+
+**`fuzzyScore` 已抽到 `public/fuzzy.js`**，主界面和历史页共用同一份实现（之前在主界面 app.js 里，历史页没法 import）。
 
 ### 页面特征
 
@@ -548,12 +566,13 @@ E:\ai-spaces\tools\wsl-worktree\
     ├── index.html          单页骨架
     ├── style.css           浅色主题（跟随 IDE light）
     ├── app.js              全部交互逻辑 + 对话框，零框架
+    ├── fuzzy.js            模糊匹配（fuzzyScore / rankByFuzzy），主界面与历史页共用
     ├── history.html        单文件历史页（独立标签页）
     ├── history.css         历史页样式（双栏）
     └── history.js          历史页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
 
 **源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
 改完源码执行：
@@ -735,6 +754,9 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | 中文 / 含空格 / 方括号的文件名 | `core.quotepath=false` + `:(literal)` pathspec，全程不转义 |
 | 文件从未提交过 | 历史页明确提示「当前分支上没有历史」，区别于加载失败 |
 | 点历史条目时有多个请求在飞 | 用 sha 比对丢弃过期响应，避免快速点击时 diff 串台 |
+| 路径搜索输入过于精确 | 只匹配到 1 条也正常显示；无匹配显示「没有匹配的文件」 |
+| 历史页没带 path 打开 | 路径框显示「搜索文件…」，列表提示先选文件，不加载历史 |
+| 路径框打开但没输入就按 Esc | 一次收起（面板未展开时不拦截事件，直接交给外层处理） |
 | 左栏收起 | 顶栏出现仓库切换器（带模糊搜索），不丢失换仓库的入口 |
 | 同名仓库在不同目录 | 顶栏候选显示目录前缀（`products/asset`）区分 |
 | 刷新页面 | 回到上次选中的仓库（hash 优先，localStorage 兜底），不再跳回第一个 |
@@ -793,6 +815,9 @@ wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/
 
 # UI：文件历史入口与页面（27 项）
 node test-ui-file-history.mjs
+
+# UI：历史页顶栏路径切换器（25 项）
+node test-ui-path-picker.mjs
 ```
 
 `test-ops.mjs` 必须在 WSL 里跑（它用 `/tmp` 绝对路径造仓库，Windows 侧 node 会把路径转成 `\tmp\...`）。
