@@ -4,6 +4,7 @@
 // ============================================================
 
 import { fuzzyScore } from '/fuzzy.js'
+import { buildTree, countFiles, displayChainName } from '/tree-model.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -21,6 +22,13 @@ const state = {
   selected: null,      // 当前选中文件路径
   filter: '',
   matched: null,       // 过滤命中的路径数组（已按相关度排序）
+  // 是否把单链目录合并成一行（VS Code 的 compact folders）。默认开，可关掉对比
+  compact: (() => {
+    try {
+      const v = localStorage.getItem('wsl-worktree.treeCompact')
+      return v === null ? true : v === '1'
+    } catch { return true }
+  })(),
 }
 
 // ---------- 工具 ----------
@@ -59,46 +67,6 @@ function openHistory(path) {
   const params = new URLSearchParams({ repo: repoId, path })
   if (wtPath) params.set('wt', wtPath)
   window.open(`/history.html?${params}`, '_blank', 'noopener')
-}
-
-// ============================================================
-// 从扁平路径建树
-// 只用真实文件做叶子，目录是路径前缀推导出来的。
-// 每个文件只存一次（在 dir.files 里），不会重复占用内存。
-// ============================================================
-function buildTree(files) {
-  const root = { name: '', path: '', dirs: new Map(), files: [] }
-  for (const f of files) {
-    const parts = f.path.split('/')
-    let node = root
-    for (let i = 0; i < parts.length - 1; i++) {
-      const seg = parts[i]
-      if (!node.dirs.has(seg)) {
-        node.dirs.set(seg, {
-          name: seg,
-          path: parts.slice(0, i + 1).join('/'),
-          dirs: new Map(),
-          files: [],
-        })
-      }
-      node = node.dirs.get(seg)
-    }
-    node.files.push({ name: parts[parts.length - 1], path: f.path, size: f.size })
-  }
-  // 排序：目录在前、文件在后，各自按名字（忽略大小写，接近 fork 的观感）
-  const sortNode = (node) => {
-    for (const d of node.dirs.values()) sortNode(d)
-    node.files.sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-  }
-  sortNode(root)
-  return root
-}
-
-/** 目录下的文件总数（含子目录），用于显示计数 */
-function countFiles(node) {
-  let n = node.files.length
-  for (const d of node.dirs.values()) n += countFiles(d)
-  return n
 }
 
 // ============================================================
@@ -178,6 +146,7 @@ function renderTree() {
   box.replaceChildren(frag)
 }
 
+
 function dirRow(d, depth, isOpen) {
   const el = document.createElement('div')
   el.className = 't-node t-dir' + (isOpen ? ' open' : '')
@@ -185,17 +154,43 @@ function dirRow(d, depth, isOpen) {
   el.setAttribute('role', 'treeitem')
   el.setAttribute('aria-expanded', String(isOpen))
   el.style.paddingLeft = `${6 + depth * 13}px`
+  // 压缩过的节点：名字里带了被折叠的层级（用 / 连接），hover 显示完整链
+  const compressed = Array.isArray(d.aliases) && d.aliases.length > 0
+  const shown = compressed ? displayChainName(d.name) : d.name
   el.innerHTML =
     `<span class="t-caret">${isOpen ? ICON_CARET_OPEN : ICON_CARET_CLOSED}</span>` +
     ICON_DIR +
-    `<span class="t-name">${esc(d.name)}</span>` +
+    `<span class="t-name${compressed ? ' t-name-compressed' : ''}"${compressed ? ` title="${esc(d.name)}"` : ''}>${esc(shown)}</span>` +
     `<span class="t-count">${countFiles(d)}</span>`
   el.addEventListener('click', () => {
-    if (state.expanded.has(d.path)) state.expanded.delete(d.path)
-    else state.expanded.add(d.path)
+    if (state.expanded.has(d.path)) {
+      state.expanded.delete(d.path)
+    } else {
+      // 一次展开：压缩已经把单链合并成一行，所以展开后直接就能看到
+      // 分叉点或文件——不需要再逐层点。
+      // 但有一种情况要补：子层如果也是「唯一子目录 + 无文件」，它可能
+      // 本身没被压缩（因为压缩是自上而下做的），这里顺带打开。
+      expandChain(d)
+    }
     renderTree()
   })
   return el
+}
+
+/**
+ * 展开一个目录，并顺带打开下面所有「唯一子目录且无文件」的层级。
+ * 压缩只处理了「从父节点开始的链」，如果子层的链头自己不是被压缩节点，
+ * 一次点击仍要连带展开，否则用户还是要连点。
+ */
+function expandChain(d) {
+  let cur = d
+  let guard = 0
+  while (guard++ < 50) {
+    state.expanded.add(cur.path)
+    // 自身有文件或已分叉 → 这一层就是用户要看的内容层，停止
+    if (cur.files.length > 0 || cur.dirs.size !== 1) break
+    cur = [...cur.dirs.values()][0]
+  }
 }
 
 function fileRow(path, name, title, depth = 0, size = null, showDir = false) {
@@ -361,13 +356,24 @@ function applyFilter() {
   if (first && first !== state.selected) selectFile(first)
 }
 
-/** 自动展开「初始文件」所在的目录链，让它可见 */
+/**
+ * 自动展开「初始文件」所在的目录链，让它可见。
+ *
+ * 压缩后目录树的层级和路径不再一一对应（com.mysoft.jmpt.benchmark 一个节点
+ * 覆盖了 4 层路径），所以不能按路径前缀简单递推——要沿真实树走一遍，
+ * 每到一个目录就判断「目标文件在不在它下面」。
+ */
 function revealPath(path) {
-  const parts = path.split('/')
-  // 只展开到末两级之前：完整展开会让很深的路径把树撑得很难找
-  for (let i = 1; i < parts.length; i++) {
-    state.expanded.add(parts.slice(0, i).join('/'))
+  if (!state.root) return
+  const walk = (node, prefix) => {
+    for (const d of node.dirs.values()) {
+      // d.path 是链末级的真实路径；用它判断目标是否在这个目录下
+      if (!path.startsWith(d.path + '/')) continue
+      state.expanded.add(d.path)
+      walk(d, d.path)
+    }
   }
+  walk(state.root, '')
 }
 
 // ============================================================
@@ -428,6 +434,21 @@ $('t-collapse-all').addEventListener('click', () => {
   toast('已全部折叠')
 })
 
+// 「合并目录」开关：关掉后恢复原始的逐层展开形态
+$('t-compact').addEventListener('change', (e) => {
+  state.compact = e.target.checked
+  try { localStorage.setItem('wsl-worktree.treeCompact', state.compact ? '1' : '0') } catch {}
+  // 重建树。展开状态保留：压缩节点的 path 是链末级，切换后仍能对上；
+  // 原先展开的中间层在压缩模式下已经不存在，会被自然忽略。
+  state.root = buildTree(state.files, state.compact)
+  renderTree()
+  // 重建后把选中项滚回视野，否则画面会跳走
+  if (state.selected) {
+    const el = $('t-tree').querySelector(`.t-file[data-path="${CSS.escape(state.selected)}"]`)
+    if (el?.scrollIntoView) el.scrollIntoView({ block: 'center' })
+  }
+})
+
 $('t-btn-history').addEventListener('click', () => {
   if (state.selected) openHistory(state.selected)
 })
@@ -450,6 +471,7 @@ async function init() {
     return
   }
   $('t-wt').textContent = wtPath ? wtPath.split('/').filter(Boolean).slice(-1)[0] : ''
+  $('t-compact').checked = state.compact
   $('t-wt').title = wtPath || ''
   $('t-commit').textContent = sha === 'HEAD' ? 'HEAD' : sha.slice(0, 7)
 
@@ -478,7 +500,7 @@ async function init() {
     const data = await api(`/api/repos/${repoId}/tree?${params}`)
     state.files = data.files || []
     sha = data.sha || sha
-    state.root = buildTree(state.files)
+    state.root = buildTree(state.files, state.compact)
     $('t-commit').textContent = sha.slice(0, 7)
     $('t-stat').textContent = `${state.files.length} 个文件`
     document.title = `File Tree · ${state.repo?.name || ''}`

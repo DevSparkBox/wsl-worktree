@@ -233,6 +233,114 @@ const binaryTest = await p.ev(`(async () => {
 })()`, true)
 check('树中有大文件可用于边界测试', binaryTest.value?.bigCount >= 0, `${binaryTest.value?.bigCount} 个 >1MB`)
 
+// ---- 单链目录合并（compact folders）----
+// 先清过滤并重新载入，确保树处于「第一层展开」的初始态
+// （前面的用例做过全部折叠，不复位的话这里没有可点开的节点）
+await p.ev(`(() => { const f=document.getElementById('t-filter'); f.value=''; f.dispatchEvent(new Event('input',{bubbles:true})) })()`)
+await sleep(900)
+await p.send('Page.reload')
+await sleep(5500)
+
+const compactOn = await p.ev(`({
+  checked: document.getElementById('t-compact').checked,
+  compressedRows: [...document.querySelectorAll('.t-dir .t-name')].filter(e => e.textContent.includes('/')).length,
+  samples: [...document.querySelectorAll('.t-dir .t-name-compressed')].slice(0, 5).map(e => ({
+    shown: e.textContent,
+    title: e.getAttribute('title'),
+  })),
+})`)
+check('默认开启合并目录', compactOn.value?.checked === true, '')
+check('出现合并的目录行', compactOn.value?.compressedRows > 0, `${compactOn.value?.compressedRows} 行`)
+check('合并行有完整路径提示',
+  (compactOn.value?.samples || []).every((s) => s.title && s.title.includes('/')),
+  JSON.stringify(compactOn.value?.samples?.[0]))
+// 一次展开：点「未展开的合并节点」后应直接看到分叉或文件，不需连点
+const oneClick = await p.ev(`(() => {
+  // 只选压缩过（t-name-compressed）且未展开的目录
+  const row = [...document.querySelectorAll('.t-dir:not(.open)')]
+    .find(e => e.querySelector('.t-name-compressed'))
+  if (!row) return null
+  const before = document.querySelectorAll('.t-node').length
+  const name = row.querySelector('.t-name').textContent
+  row.click()
+  return { before, name }
+})()`)
+await sleep(1000)
+const afterOneClick = await p.ev(`({
+  nodes: document.querySelectorAll('.t-node').length,
+  open: [...document.querySelectorAll('.t-dir.open')].map(e => e.querySelector('.t-name').textContent),
+})`)
+check('点击合并节点一次即可展开', oneClick.value?.before != null && afterOneClick.value?.nodes > oneClick.value?.before,
+  `${oneClick.value?.name}: ${oneClick.value?.before} → ${afterOneClick.value?.nodes} 节点`)
+
+// 长链显示省略：需要展开到足够深才会出现 5 段以上的链。
+// 从 backend/src 一路往里点：先展开它，再逐个展开它的子目录
+const deepChain = await p.ev(`(() => {
+  const dirs = () => [...document.querySelectorAll('.t-dir')]
+  const byName = (n, opened) => dirs().find(e =>
+    (e.querySelector('.t-name')?.textContent || '') === n &&
+    (opened === undefined || e.classList.contains('open') === opened))
+
+  // 1) 确认 backend/src 展开
+  let b = byName('backend/src', false)
+  if (b) b.click()
+  // 2) 逐个展开 backend/src 下的子目录（jmpt-* 等），每轮重新查询（DOM 已重建）
+  const targets = ['jmpt-benchmark', 'jmpt-common', 'jmpt-unit', 'jmpt-features']
+  for (const t of targets) {
+    const row = byName(t, false)
+    if (row) row.click()
+  }
+  // 3) 处理展开后新出现的压缩节点（如 xxx/src/main/java/com/...）
+  for (let i = 0; i < 6; i++) {
+    const next = dirs().find(e =>
+      !e.classList.contains('open') && e.querySelector('.t-name-compressed'))
+    if (!next) break
+    next.click()
+    // 一旦出现长链就停
+    const hasLong = dirs().some(e => {
+      const t = e.querySelector('.t-name-compressed')?.getAttribute('title') || ''
+      return t.split('/').length > 4
+    })
+    if (hasLong) break
+  }
+  const all = [...document.querySelectorAll('.t-name-compressed')].map(e => ({
+    shown: e.textContent,
+    title: e.getAttribute('title') || '',
+  }))
+  const long = all.filter(x => x.title.split('/').length > 4)
+  return {
+    total: all.length,
+    longCount: long.length,
+    sample: long[0],
+    opened: document.querySelectorAll('.t-dir.open').length,
+  }
+})()`)
+await sleep(1800)
+check('深层出现长链', deepChain.value?.longCount > 0,
+  `${deepChain.value?.longCount} 条长链 / ${deepChain.value?.total} 条合并行（展开 ${deepChain.value?.opened} 目录）`)
+check('长链显示带省略号', String(deepChain.value?.sample?.shown || '').includes('…'),
+  deepChain.value?.sample ? `${deepChain.value.sample.shown}   ← 完整 ${deepChain.value.sample.title.split('/').length} 段` : '')
+check('长链 title 是完整路径',
+  (deepChain.value?.sample?.title || '').split('/').length > 4,
+  deepChain.value?.sample?.title?.slice(-46))
+
+// 关闭合并 → 恢复逐层
+await p.ev(`(() => { const c=document.getElementById('t-compact'); c.checked=false; c.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+await sleep(1000)
+const compactOff = await p.ev(`({
+  compressedRows: document.querySelectorAll('.t-name-compressed').length,
+  dirs: document.querySelectorAll('.t-dir').length,
+  stored: localStorage.getItem('wsl-worktree.treeCompact'),
+})`)
+check('关闭合并后没有合并行', compactOff.value?.compressedRows === 0, `${compactOff.value?.compressedRows} 行`)
+check('开关状态被记住', compactOff.value?.stored === '0', compactOff.value?.stored)
+
+// 重新开启
+await p.ev(`(() => { const c=document.getElementById('t-compact'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+await sleep(900)
+const compactBack = await p.ev(`document.querySelectorAll('.t-name-compressed').length`)
+check('重新开启后合并行恢复', compactBack.value > 0, `${compactBack.value} 行`)
+
 await p.shot('file-tree-final.png')
 
 const errs = await p.ev(`window.__errs || []`)

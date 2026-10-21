@@ -86,6 +86,7 @@
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
 | 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
 | 完整文件树 | 详情面板右上角「文件树」→ 新标签页（整仓库快照，左树右内容，仿 fork） |
+| 合并单链目录 | 文件树默认把 com/mysoft/jmpt 这类单链压成一行，可开关 |
 | 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
 | 键盘 | `r` 刷新，`/` 聚焦仓库搜索（左栏收起时聚焦顶栏切换器），`[` `]` 开关左右面板 |
 
@@ -183,6 +184,47 @@ if (hardFail || (res.code !== 0 && tagConflicts.length === 0)) return { ok: fals
 - 从文件行进来时 URL 带 `path`，进去自动定位并展开所在目录链
 - 过滤框支持模糊匹配，结果用**扁平列表**
 - 分隔线可拖动，宽度记在 `localStorage`
+
+### 单链目录合并（compact folders）
+
+Java 项目的路径经常是 `com/mysoft/jmpt/benchmark` 这种每级只有一个子目录的长链，
+原样铺出来要连点十几次才能看到内容层。所以默认把单链合并成一行（VS Code 行为）：
+
+```
+合并前（12 层）                                    合并后（6 层）
+backend                                            backend/src
+  src                                                ├ jmpt-benchmark
+    jmpt-benchmark                                   │   src/main/java/com/mysoft/jmpt/benchmark
+      src                                            │     ├ constant
+        main                                         │     └ metadata
+          java                                       ├ jmpt-common
+            com                                      │   src/…/jmpt/common
+              mysoft                                 │     ├ abstraction
+                jmpt                                 │     └ adapter
+                  benchmark                          └ jmpt-unit
+                    ├ constant
+                    └ metadata
+```
+
+**合并规则**：节点自身没有文件、且只有一个子目录 → 把子目录并进来，循环到「有文件」或「子目录不止一个」为止。
+
+- **分叉点本身会并入链名**：`com` → `com/mysoft` → `com/mysoft/jmpt`，停在 jmpt（它有 benchmark/common 两个子目录）
+- **自身有文件时不合并**：那是「真目录」，压掉会让文件看起来挂错位置
+- **用 `/` 而不是 `.` 连接**：`.claude/commands` 若写成 `.claude.commands` 会被误读成文件名（假扩展名）
+
+**长链二次压缩**：超过 4 段时中间省略，保留头尾两段——`src/main/java/com/mysoft/jmpt/common`
+显示为 `src/…/jmpt/common`。靠开头（src）和结尾（common）就能定位，完整名字在 `title` 里。
+
+**一次展开**：合并已经把单链压成一行，所以点一下就能看到分叉点或文件，不用逐层点。
+`expandChain` 还会顺带打开下面仍是单链的层级（压缩是从父节点开始的，子层的链头可能没被压）。
+
+**可关闭**：树头部有「合并目录」开关，关掉恢复逐层展开。状态存 `localStorage`。
+
+**实现注意**：压缩后 `path` 取链末级的真实路径（展开状态按它记），
+`aliases` 记下所有被折叠掉的中间层路径。`revealPath`（定位初始文件）必须沿真实树走、
+用 `d.path` 判断目标是否在目录下，不能按路径前缀递推——压缩后层级和路径不再一一对应。
+
+树构建逻辑抽到 `public/tree-model.js`（纯函数），由 `test-tree-model.mjs` 直接单测。
 
 ### 三个验证过的点
 
@@ -638,7 +680,7 @@ E:\ai-spaces\tools\wsl-worktree\
     └── history.js          历史页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
 
 **源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
 改完源码执行：
@@ -827,6 +869,9 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | 路径框打开但没输入就按 Esc | 一次收起（面板未展开时不拦截事件，直接交给外层处理） |
 | 文件树里 18k 文件 | 只渲染展开路径上的节点；默认展开第一层 35 目录 + 28 文件 |
 | 文件树里搜同名文件 | 文件名精确/前缀命中优先于路径模糊分；过滤结果行内显示所在目录 |
+| 每级只有一个子目录的长链 | 默认合并成一行（`com/mysoft/jmpt`），长链中间省略为 `src/…/common` |
+| 目录既有文件又有唯一子目录 | 不合并（那是「真目录」），只合并其下的纯目录链 |
+| 定位到深层文件 | 自动展开所在链；压缩后按真实 `path` 逐层判断，不按路径前缀递推 |
 | 文件树里的大文件 / 二进制 | 超大（>2MB）提示不在浏览器展示；二进制只看大小，不塞进 JSON |
 | 左栏收起 | 顶栏出现仓库切换器（带模糊搜索），不丢失换仓库的入口 |
 | 同名仓库在不同目录 | 顶栏候选显示目录前缀（`products/asset`）区分 |
@@ -890,7 +935,10 @@ node test-ui-file-history.mjs
 # UI：历史页顶栏路径切换器（25 项）
 node test-ui-path-picker.mjs
 
-# 接口+UI：完整文件树（31 项）
+# 纯逻辑：建树 + 单链压缩（26 项）
+node test-tree-model.mjs
+
+# 接口+UI：完整文件树（41 项）
 node test-ui-file-tree.mjs
 ```
 

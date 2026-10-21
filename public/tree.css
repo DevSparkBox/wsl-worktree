@@ -352,3 +352,23 @@
 }
 /* 过滤模式下文件名不该被压缩：它是辨识主体 */
 .t-file .t-name { flex: 0 0 auto; max-width: 55%; }
+
+/* 压缩节点（多层目录合并成一行）：用稍暗的色和斜杠分隔，表明这是「链」而非单个目录 */
+.t-name-compressed { color: var(--text-dim); }
+.t-dir.open .t-name-compressed { color: var(--text); }
+
+/* 「合并目录」开关：放在过滤框和折叠按钮之间，紧凑不抢焦点 */
+.t-toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+  padding: 0 2px;
+}
+.t-toggle input { margin: 0; cursor: pointer; }
+.t-toggle:hover { color: var(--text); }
