@@ -1,5 +1,6 @@
 // WSL Worktree — P0 只读客户端
 import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
+import { linkify } from '/linkify.js'
 const $ = (id) => document.getElementById(id)
 const state = {
   repos: [],
@@ -418,7 +419,7 @@ function renderLog() {
       <td><span class="sha" title="${c.sha}">${c.sha.slice(0, 7)}</span></td>
       <td class="time" title="${fmtTime(c.time)}">${relTime(c.time)}</td>
       <td class="author" title="${esc(c.email)}">${esc(c.author)}</td>
-      <td class="subject" title="${esc(c.subject)}">${esc(c.subject)}${refsHtml ? ' ' + refsHtml : ''}</td>`
+      <td class="subject" title="${esc(c.subject)}">${linkify(c.subject)}${refsHtml ? ' ' + refsHtml : ''}</td>`
     frag.appendChild(tr)
   }
   body.replaceChildren(frag)
@@ -427,6 +428,9 @@ function renderLog() {
 }
 
 $('log-body').addEventListener('click', (e) => {
+  // 点的是提交信息里的外链：让它正常打开，不要顺带选中 commit
+  // （置顶冒泡会让 <tr> 的处理也跑一遍，看起来像「点链接却跳了详情」）
+  if (e.target.closest('a.ext-link')) return
   const tr = e.target.closest('tr[data-sha]')
   if (!tr) return
   selectCommit(tr.dataset.sha)
@@ -476,7 +480,8 @@ function renderFileList(commit, files) {
   if (commit) {
     const head = document.createElement('div')
     head.className = 'detail-sec-title'
-    head.textContent = commit.subject || '(无标题)'
+    // 提交信息里的外链要可点击（内部常用的 TAPD / Jira 链接）
+    head.innerHTML = linkify(commit.subject || '(无标题)')
     frag.appendChild(head)
 
     const meta = document.createElement('div')

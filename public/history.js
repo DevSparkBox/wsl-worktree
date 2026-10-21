@@ -5,6 +5,7 @@
 // ============================================================
 
 import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
+import { linkify } from '/linkify.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -125,12 +126,16 @@ function renderList() {
           <span class="h-stat">${statText}</span>
           <span class="h-sha">${esc(c.sha.slice(0, 7))}</span>
         </div>
-        <div class="h-subject" title="${esc(c.subject)}">${esc(c.subject || '(无标题)')}</div>
+        <div class="h-subject" title="${esc(c.subject)}">${c.subject ? linkify(c.subject) : '(无标题)'}</div>
         ${showFile
           ? `<div class="h-fileline">${pill}<span class="name${c.rename ? ' rename-label' : ''}" title="${esc(fileTitle)}">${esc(fileLabel)}</span></div>`
           : (pill ? `<div class="h-fileline">${pill}<span class="name" style="color:var(--text-faint)">文件被改名</span></div>` : '')}
       </div>`
-    row.addEventListener('click', () => selectCommit(c))
+    row.addEventListener('click', (e) => {
+      // 点提交信息里的外链时不切换选中项（否则点链接会同时改动右侧 diff）
+      if (e.target.closest('a.ext-link')) return
+      selectCommit(c)
+    })
     frag.appendChild(row)
   }
   box.replaceChildren(frag)

@@ -1113,3 +1113,21 @@ body.resizing * { cursor: col-resize !important; }
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ---------- commit message 里的外链 ---------- */
+.ext-link {
+  color: var(--accent);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: border-color 120ms, color 120ms;
+  /* 长 URL 在窄表格里不要撑破布局 */
+  word-break: break-all;
+}
+.ext-link:hover {
+  border-bottom-color: currentColor;
+}
+.ext-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: 2px;
+}

@@ -472,3 +472,8 @@
   font-size: 11.5px;
   color: var(--text-faint);
 }
+
+/* 历史页里提交摘要的外链：行高较紧，不要影响两行截断 */
+.h-subject .ext-link {
+  word-break: break-all;
+}

@@ -19,6 +19,47 @@
 
 宽度和折叠状态都存 `localStorage`（key `wsl-worktree.layout.v1`），刷新后保持。
 
+### 提交信息里的 URL 可点击
+
+commit message 里普遍带工单链接（实测 `jm_java` 的 60 条提交里有 27 个 `www.tapd.cn` 链接），纯文本只能复制粘贴。现在自动转成链接，**新标签页打开**。
+
+三处都生效：提交日志表、详情面板的提交摘要、文件历史页的列表。
+
+**三条实现规则**（`public/linkify.js`）：
+
+**① 只放行 http/https，且用白名单**
+
+```js
+URL_RE = /https?:\/\/[^\s<>"'`，。；：！？、（）【】《》「」]+/gi
+// 还要再 new URL() 校验一次协议
+```
+
+`javascript:alert(1)`、`data:text/html,...`、`ftp://` 都不会变成链接。用白名单而非黑名单——将来改正则也不会漏。
+
+**② 中文标点当 URL 边界**
+
+`详见 https://x.cn/p。` 里那个「。」不属于链接。半角空白/尖括号/引号也算边界，但**全角标点必须单独列出来**，否则会把后面的中文一起吞进 URL。
+
+尾部残留的 `.,;:!?)]}` 再剥一次（`见 https://x.cn/p.` 里的句号）。
+
+**③ 文本必须转义**
+
+返回的是 HTML，直接进 `innerHTML`。提交信息是不可信输入，`& < > " '` 全部转义，URL 本身也转义（`?a=1&b=2` → `&amp;`）。
+
+**点击不能误触发选中**
+
+日志表整行可点击（选中 commit），链接在行内。所以在行点击处理里先判断：
+
+```js
+if (e.target.closest('a.ext-link')) return
+```
+
+否则点链接会「打开新标签页 + 顺带切换右侧详情」，体验很怪。文件历史页同理。
+
+**可见性**：链接用主题蓝 + hover 出现下划线，`word-break: break-all` 防止长 URL 撑破窄表格列。日志表的列宽有限，长链接会截断显示，但 `title` 有完整地址。
+
+---
+
 ### 记住当前仓库
 
 刷新、重开标签页都会回到上次看的仓库，而不是每次跳回第一个。
@@ -83,6 +124,7 @@
 | worktree 表格 | 分支、路径、改动文件数、ahead/behind、主/锁定/待清理徽章 |
 | 打开位置 | 行内按钮：资源管理器、Windows Terminal |
 | 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
+| 工单链接可点 | commit message 里的 http(s) URL 自动变链接，新标签页打开 |
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
 | 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
 | 完整文件树 | 详情面板右上角「文件树」→ 新标签页（整仓库快照，左树右内容，仿 fork） |
@@ -733,6 +775,7 @@ E:\ai-spaces\tools\wsl-worktree\
     ├── style.css           浅色主题（跟随 IDE light）
     ├── app.js              全部交互逻辑 + 对话框，零框架
     ├── fuzzy.js            模糊匹配（fuzzyScore / rankByFuzzy），主界面与历史页共用
+    ├── linkify.js          commit message 里的 URL 转链接（白名单 + 转义）
     ├── history.html        单文件历史页（独立标签页）
     ├── history.css         历史页样式（双栏）
     └── history.js          历史页逻辑
@@ -918,6 +961,9 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | tag 与分支同名 | 切换/创建时优先当 tag 处理（写全 `refs/tags/<tag>`），行为确定 |
 | 切到 tag / commit | 处于 detached 状态，界面明确提示；新建或创建 worktree 也支持 |
 | 有未推送提交的 worktree | 拒绝删除，列出那些 commit |
+| commit 里带 URL | 自动变可点链接，新标签页打开；点链接不会误选中 commit |
+| commit 里含 `javascript:` / `data:` | 不生成链接（协议白名单） |
+| URL 后面紧跟中文标点 | 「。」「，」「）」等视为边界，不进 URL |
 | 文件被改名后查历史 | `--follow` 追到改名前；每条记录带当时的路径，diff 才不会空 |
 | 中文 / 含空格 / 方括号的文件名 | `core.quotepath=false` + `:(literal)` pathspec，全程不转义 |
 | 文件从未提交过 | 历史页明确提示「当前分支上没有历史」，区别于加载失败 |
@@ -1001,6 +1047,12 @@ node test-tree-model.mjs
 
 # 纯逻辑：语法高亮（53 项，含转义/保真/性能）
 node test-highlight.mjs
+
+# 纯逻辑：URL 链接化（37 项，含协议白名单/中文标点边界）
+node test-linkify.mjs
+
+# UI：commit 里的 URL 可点击（16 项）
+node test-ui-links.mjs
 
 # 接口+UI：完整文件树（55 项）
 node test-ui-file-tree.mjs
