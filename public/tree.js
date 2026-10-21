@@ -5,6 +5,7 @@
 
 import { fuzzyScore } from '/fuzzy.js'
 import { buildTree, countFiles, displayChainName } from '/tree-model.js'
+import { detectLang, highlightLines } from '/highlight.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -29,6 +30,15 @@ const state = {
       return v === null ? true : v === '1'
     } catch { return true }
   })(),
+  // 是否启用语法高亮。默认开
+  highlight: (() => {
+    try {
+      const v = localStorage.getItem('wsl-worktree.treeHighlight')
+      return v === null ? true : v === '1'
+    } catch { return true }
+  })(),
+  // 上一次渲染用的内容，切换高亮时直接重渲染，不必重新请求
+  lastContent: null,
 }
 
 // ---------- 工具 ----------
@@ -265,7 +275,12 @@ async function selectFile(path) {
       return
     }
 
-    $('t-file-meta').textContent = `${data.lines} 行 · ${fmtSize(data.size)}`
+    // 显示语言名，让人知道当前应用了什么语法规则（识别不出时不显示）
+    const lang = detectLang(path)
+    const langLabel = lang ? ` · ${LANG_LABEL[lang] || lang}` : ''
+    $('t-file-meta').textContent = `${data.lines} 行 · ${fmtSize(data.size)}${langLabel}`
+    // 缓存内容：切换高亮开关时直接重渲染，不用再请求一次
+    state.lastContent = data.content
     body.replaceChildren(renderCode(data.content, path))
     body.scrollTop = 0
     if (data.truncated) {
@@ -281,6 +296,23 @@ async function selectFile(path) {
 }
 
 /** 带行号的代码块。不做语法高亮（fork 那个也只是纯文本 + 行号）。 */
+/** 超过这个行数就不高亮——大文件上色后再塞 DOM，滚动会明显卡 */
+const HIGHLIGHT_MAX_LINES = 5000
+/** 超过这个字节数也不高亮（纯文本更快） */
+const HIGHLIGHT_MAX_BYTES = 512 * 1024
+
+/** 语言 key → 界面上显示的名字 */
+const LANG_LABEL = {
+  js: 'JavaScript', ts: 'TypeScript', jsx: 'JSX', tsx: 'TSX',
+  java: 'Java', cs: 'C#', c: 'C', cpp: 'C++', h: 'C header',
+  go: 'Go', swift: 'Swift', kt: 'Kotlin', scala: 'Scala', php: 'PHP', rs: 'Rust',
+  json: 'JSON', css: 'CSS', less: 'Less', scss: 'SCSS', sass: 'Sass',
+  yaml: 'YAML', yml: 'YAML', toml: 'TOML', ini: 'INI',
+  sh: 'Shell', bash: 'Bash', zsh: 'Zsh', py: 'Python', rb: 'Ruby',
+  sql: 'SQL', xml: 'XML', html: 'HTML', vue: 'Vue', md: 'Markdown',
+  properties: 'Properties', env: 'Env', dockerfile: 'Dockerfile', makefile: 'Makefile',
+}
+
 function renderCode(content, path) {
   const wrap = document.createElement('div')
   wrap.className = 't-code-wrap'
@@ -289,8 +321,26 @@ function renderCode(content, path) {
   // 末尾换行会split出一个空串，去掉它避免显示多余空行
   if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
 
+  const lang = detectLang(path)
+  // 大文件不高亮：高亮本身很快（600 行 4ms），但生成的 span 数会让
+  // 浏览器的布局/滚动变慢，得不偿失
+  const useHL = state.highlight && lang &&
+    lines.length <= HIGHLIGHT_MAX_LINES && content.length <= HIGHLIGHT_MAX_BYTES
+
+  // 一次算出全部行的高亮结果，跨行状态（块注释）由 highlightLines 统一维护
+  let rendered = null
+  if (useHL) {
+    try {
+      rendered = highlightLines(content, lang)
+      // 行数必须对得上，否则说明拆分口径不一致，退回纯文本更安全
+      if (rendered.length !== lines.length) rendered = null
+    } catch {
+      rendered = null
+    }
+  }
+
   const table = document.createElement('table')
-  table.className = 't-code'
+  table.className = 't-code' + (useHL && rendered ? ' has-hl' : '')
   const tbody = document.createElement('tbody')
   const frag = document.createDocumentFragment()
 
@@ -301,8 +351,13 @@ function renderCode(content, path) {
     tdNo.textContent = String(i + 1)
     const tdCode = document.createElement('td')
     tdCode.className = 'code'
-    // 用 textContent 而不是 innerHTML：内容里可能有任何字符，不解析 HTML
-    tdCode.textContent = lines[i] || '\u00a0'
+    if (rendered) {
+      // highlightLines 内部已对每个片段做 HTML 转义，这里可以安全用 innerHTML
+      tdCode.innerHTML = rendered[i] || '&nbsp;'
+    } else {
+      // 纯文本路径：用 textContent，绝不解析 HTML
+      tdCode.textContent = lines[i] || '\u00a0'
+    }
     tr.appendChild(tdNo)
     tr.appendChild(tdCode)
     frag.appendChild(tr)
@@ -453,6 +508,17 @@ $('t-btn-history').addEventListener('click', () => {
   if (state.selected) openHistory(state.selected)
 })
 
+// 高亮开关：立即重渲染当前文件（用缓存内容，不重新请求）
+$('t-hl').addEventListener('change', (e) => {
+  state.highlight = e.target.checked
+  try { localStorage.setItem('wsl-worktree.treeHighlight', state.highlight ? '1' : '0') } catch {}
+  if (state.lastContent == null || !state.selected) return
+  const body = $('t-file-body')
+  const keepScroll = body.scrollTop
+  body.replaceChildren(renderCode(state.lastContent, state.selected))
+  body.scrollTop = keepScroll
+})
+
 $('t-btn-copy-path').addEventListener('click', async () => {
   if (!state.selected) return
   try {
@@ -472,6 +538,7 @@ async function init() {
   }
   $('t-wt').textContent = wtPath ? wtPath.split('/').filter(Boolean).slice(-1)[0] : ''
   $('t-compact').checked = state.compact
+  $('t-hl').checked = state.highlight
   $('t-wt').title = wtPath || ''
   $('t-commit').textContent = sha === 'HEAD' ? 'HEAD' : sha.slice(0, 7)
 

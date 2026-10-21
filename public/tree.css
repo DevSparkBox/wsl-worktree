@@ -372,3 +372,43 @@
 }
 .t-toggle input { margin: 0; cursor: pointer; }
 .t-toggle:hover { color: var(--text); }
+
+/* ============================================================
+   语法高亮配色
+   沿用主界面变量，不引入新色系，避免和整体观感割裂。
+   每种 token 用「一个主色 + 可选底色」，色相克制（5 个色系）。
+   ============================================================ */
+.t-code.has-hl .code { color: var(--text); }
+
+/* 关键字：控制流用主题蓝，声明/修饰符用紫，类型用青 */
+.hl-ctrl { color: var(--accent); }
+.hl-decl { color: var(--purple); }
+.hl-type { color: #0f766e; }          /* teal：和蓝/紫拉开距离 */
+.hl-lit  { color: #b45309; }          /* amber：true/false/null */
+
+/* 字符串 / 数字 */
+.hl-str  { color: var(--green); }
+.hl-num  { color: #b45309; }
+
+/* 注释：压暗 + 斜体，视觉上退到背景里 */
+.hl-com  { color: var(--text-faint); font-style: italic; }
+
+/* Java/C# 注解 */
+.hl-ann  { color: #9a6700; }
+
+/* 标记语言 */
+.hl-tag  { color: var(--red); }
+.hl-attr { color: var(--accent); }
+
+/* CSS/LESS */
+.hl-sel  { color: var(--red); }
+.hl-prop { color: var(--accent); }
+.hl-var  { color: var(--purple); }
+
+/* Markdown */
+.hl-md-h    { color: var(--accent); font-weight: 600; }
+.hl-md-li   { color: var(--red); }
+.hl-md-quo  { color: var(--text-dim); font-style: italic; }
+.hl-md-code { color: var(--green); background: var(--bg-alt); }
+.hl-md-b    { font-weight: 600; }
+.hl-md-link { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; }

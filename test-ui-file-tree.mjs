@@ -341,6 +341,97 @@ await sleep(900)
 const compactBack = await p.ev(`document.querySelectorAll('.t-name-compressed').length`)
 check('重新开启后合并行恢复', compactBack.value > 0, `${compactBack.value} 行`)
 
+// ---- 语法高亮 ----
+// 直接打开一个 Java 文件（已知有 public/class/注释/字符串等 token）
+const javaFile = (await (await fetch(`http://localhost:7801/api/repos/${ID}/tree?sha=HEAD`)).json())
+  .files.find((f) => /\.java$/.test(f.path) && f.size > 1500 && f.size < 12000)
+check('找不到测试用 Java 文件', Boolean(javaFile), javaFile?.path?.split('/').pop() || '未找到')
+
+await p.send('Page.navigate', {
+  url: `http://localhost:7801/tree.html?repo=${ID}&sha=HEAD&wt=${encodeURIComponent(REPO)}&path=${encodeURIComponent(javaFile.path)}`,
+})
+await sleep(5500)
+
+const hlOn = await p.ev(`({
+  hasHlTable: !!document.querySelector('.t-code.has-hl'),
+  spanCount: document.querySelectorAll('.t-code .code span').length,
+  kinds: [...new Set([...document.querySelectorAll('.t-code .code span')].map(e => e.className))].sort(),
+  meta: document.getElementById('t-file-meta').textContent,
+  checked: document.getElementById('t-hl').checked,
+})`)
+check('默认开启高亮', hlOn.value?.checked === true, '')
+check('代码已上色', hlOn.value?.hasHlTable === true && hlOn.value?.spanCount > 0,
+  `${hlOn.value?.spanCount} 个 span`)
+check('出现多种 token 类别', (hlOn.value?.kinds || []).length >= 3, JSON.stringify(hlOn.value?.kinds))
+check('meta 显示语言名', /Java/.test(hlOn.value?.meta || ''), hlOn.value?.meta)
+
+// 内容必须与纯文本一致（高亮不能吞字符）
+const contentEqual = await p.ev(`(async () => {
+  const params = new URLSearchParams({ sha: 'HEAD', path: ${JSON.stringify(javaFile.path)} })
+  params.set('wt', ${JSON.stringify(REPO)})
+  const r = await fetch('/api/repos/${ID}/file-content?' + params)
+  const d = await r.json()
+  const raw = d.content.split('\\n')
+  if (raw.length > 1 && raw[raw.length - 1] === '') raw.pop()
+  const tds = [...document.querySelectorAll('.t-code .code')]
+  if (tds.length !== raw.length) return { ok: false, why: 'rows ' + tds.length + ' vs ' + raw.length }
+  // 每行比对去标签后的文本（空行渲染为 nbsp）
+  for (let i = 0; i < raw.length; i++) {
+    const got = tds[i].textContent.replace(/\\u00a0/g, '')
+    const want = raw[i]
+    if (got !== want) return { ok: false, why: 'line ' + (i+1) + ': ' + JSON.stringify(got.slice(0,40)) + ' != ' + JSON.stringify(want.slice(0,40)) }
+  }
+  return { ok: true, rows: raw.length }
+})()`)
+check('高亮后文本与原文逐行一致', contentEqual.value?.ok === true,
+  contentEqual.value?.ok ? `${contentEqual.value?.rows} 行` : contentEqual.value?.why)
+
+// 关掉高亮 → 回到纯文本
+await p.ev(`(() => { const c=document.getElementById('t-hl'); c.checked=false; c.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+await sleep(900)
+const hlOff = await p.ev(`({
+  hasHlTable: !!document.querySelector('.t-code.has-hl'),
+  spanCount: document.querySelectorAll('.t-code .code span').length,
+  rows: document.querySelectorAll('.t-code tr').length,
+  stored: localStorage.getItem('wsl-worktree.treeHighlight'),
+})`)
+check('关闭后无高亮 span', hlOff.value?.spanCount === 0, `${hlOff.value?.spanCount} 个`)
+check('关闭后行数不变', hlOff.value?.rows > 0, `${hlOff.value?.rows} 行`)
+check('高亮开关状态被记住', hlOff.value?.stored === '0', hlOff.value?.stored)
+
+// 重新开启
+await p.ev(`(() => { const c=document.getElementById('t-hl'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+await sleep(900)
+const hlBack = await p.ev(`document.querySelectorAll('.t-code .code span').length`)
+check('重新开启后恢复高亮', hlBack.value > 0, `${hlBack.value} 个 span`)
+
+// 纯文本文件（无扩展名/未知扩展名）不应崩，也不该有 span
+// 注意：路径必须真实存在，否则页面会回退到第一个文件（README.md），测的就不是目标了
+const plainTarget = (await (await fetch(`http://localhost:7801/api/repos/${ID}/tree?sha=HEAD`)).json())
+  .files.find((f) => /(^|\/)LICENSE$|(^|\/)COPYING$|\.unknownext$/.test(f.path))
+check('找到无扩展名的纯文本文件', Boolean(plainTarget), plainTarget?.path || '未找到')
+
+if (plainTarget) {
+  await p.send('Page.navigate', {
+    url: `http://localhost:7801/tree.html?repo=${ID}&sha=HEAD&wt=${encodeURIComponent(REPO)}&path=${encodeURIComponent(plainTarget.path)}`,
+  })
+  await sleep(4500)
+  const plainFile = await p.ev(`({
+    rows: document.querySelectorAll('.t-code tr').length,
+    spans: document.querySelectorAll('.t-code .code span').length,
+    hasHl: !!document.querySelector('.t-code.has-hl'),
+    meta: document.getElementById('t-file-meta').textContent,
+    shownPath: document.getElementById('t-file-path').textContent,
+  })`)
+  check('未知语言按纯文本显示', plainFile.value?.spans === 0 && plainFile.value?.rows > 0,
+    `${plainFile.value?.rows} 行, ${plainFile.value?.spans} span`)
+  check('未知语言不显示语言名', !/·\s*(Java|Less|Markdown|TypeScript|Vue)\s*$/.test(plainFile.value?.meta || ''),
+    plainFile.value?.meta)
+  check('确实打开了目标文件（未回退）',
+    plainFile.value?.shownPath === plainTarget.path,
+    plainFile.value?.shownPath?.split('/').pop())
+}
+
 await p.shot('file-tree-final.png')
 
 const errs = await p.ev(`window.__errs || []`)
