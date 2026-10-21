@@ -225,6 +225,16 @@ if (hist) {
   check('清空过滤可恢复', filtered.value?.all > 0, `${filtered.value?.all} 条`)
 
   // ---- 7. 改名标记 ----
+  // 注意：不能用「刚点开的那个文件」来断言改名——它取的是日志里第一个
+  // 有改动的 commit 的第一个文件，仓库数据一变就可能没有改名历史（很脆）。
+  // 这里换成一个**确定有改名历史**的文件重新打开。
+  const RENAME_FILE = 'data/sql/updatesql/mysql/[1-1][01]STUFF函数.sql'
+  // 复用之前抓到的 history URL，只把 path 换掉（省去自己拼 repo id）
+  const renameUrl = new URL(url, 'http://localhost:7801')
+  renameUrl.searchParams.set('path', RENAME_FILE)
+  await hist.send('Page.navigate', { url: renameUrl.href })
+  await sleep(5200)
+
   const renameInfo = await hist.ev(`(() => {
     const rows = [...document.querySelectorAll('#h-list .h-row')]
     const withPill = rows.filter(r => r.querySelector('.h-pill.rename'))

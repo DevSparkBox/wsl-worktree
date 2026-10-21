@@ -982,6 +982,11 @@ async function openPullDialog(wt) {
     rebase: '把本地提交挪到远程之上，历史保持线性。会产生新 commit hash。',
   }
 
+  // 一旦 pull 成功，主按钮就该退出「可执行」状态：
+  // 否则会出现「输出已经说已是最新，按钮还亮着蓝底」，让人以为没成功、
+  // 或者以为还要再点一次。
+  let done = false
+
   await openModal({
     title: `更新分支 · ${wt.branch || 'detached'}`,
     body,
@@ -992,7 +997,12 @@ async function openPullDialog(wt) {
         label: '开始更新',
         kind: 'primary',
         onClick: async (ctx) => {
+          // 已完成：这个按钮现在叫「关闭」，点它就是关掉对话框
+          if (done) return true
+
+          // 注意：底栏第一个 .btn 是「取消」，主按钮要靠 .primary 定位
           const btn = ctx.foot.querySelector('.btn.primary')
+          const cancelBtn = ctx.foot.querySelector('.btn:not(.primary)')
           const mode = body.querySelector('#pull-mode .on')?.dataset.v || 'ff-only'
           setBusy(btn, true, 'pull 中…')
           const r = await act('pull', { wt: wt.path, mode })
@@ -1000,10 +1010,29 @@ async function openPullDialog(wt) {
           await refreshAfterWrite()
 
           if (r.ok) {
-            body.querySelector('#pull-result').innerHTML =
-              `<div class="note ok">更新完成（${esc(r.mode)}）· 上游 <code>${esc(r.upstream)}</code></div>` +
-              `<div class="filelist">${esc((r.output || '').slice(-1500))}</div>`
-            return false // 留在对话框看结果
+            done = true
+            const changed = r.changed !== false
+            if (changed) {
+              const n = r.incoming || 0
+              body.querySelector('#pull-result').innerHTML =
+                `<div class="note ok">更新完成，拉取了 <strong>${n}</strong> 个提交（${esc(r.mode)}）· 上游 <code>${esc(r.upstream)}</code></div>` +
+                `<div class="filelist">${esc((r.output || '').slice(-1500))}</div>`
+            } else {
+              // 「已是最新」不是失败，但也不该看起来像刚做成一件事
+              body.querySelector('#pull-result').innerHTML =
+                `<div class="note">已经是最新，没有需要更新的提交（${esc(r.mode)}）· 上游 <code>${esc(r.upstream)}</code></div>` +
+                `<div class="filelist">${esc((r.output || '').slice(-1200))}</div>`
+            }
+            // 主按钮退场：去掉 primary 高亮 + 改文案，避免误以为还要再点
+            btn.textContent = '关闭'
+            btn.className = 'btn'
+            btn.dataset.label = '关闭'
+            // 取消按钮此时多余，隐藏
+            if (cancelBtn) cancelBtn.hidden = true
+            // 合并方式也不该再改（改了也不会生效）
+            const seg = body.querySelector('#pull-mode')
+            if (seg) seg.classList.add('disabled')
+            return false // 留在对话框让用户看结果
           }
 
           const reasonText = {

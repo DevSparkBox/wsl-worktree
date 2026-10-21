@@ -1131,3 +1131,9 @@ body.resizing * { cursor: col-resize !important; }
   outline-offset: 1px;
   border-radius: 2px;
 }
+
+/* 操作已完成时，把「合并方式」置灰：再改也不会生效，别让用户白点 */
+.seg.disabled {
+  opacity: .55;
+  pointer-events: none;
+}

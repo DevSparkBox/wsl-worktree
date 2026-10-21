@@ -139,11 +139,40 @@ if (e.target.closest('a.ext-link')) return
 
 | 功能 | 入口 | 底层命令 |
 |---|---|---|
-| **更新仓库** | 工具栏「更新仓库」 | `git fetch --all --tags --prune --progress` || **更新分支** | 行内「拉取」 | `git pull --ff-only` 或 `--rebase` |
+| **更新仓库** | 工具栏「更新仓库」 | `git fetch --all --tags --prune --progress` |
+| **更新分支** | 行内「拉取」 | `git pull --ff-only` 或 `--rebase` |
 | **切换分支** | 行内「切换」 | `git checkout <branch>` / `-b` / `--track` / `--detach refs/tags/<tag>` |
 | **创建 worktree** | 工具栏「新建 worktree」 | `git worktree add` 五种模式（含基于 tag） |
 | **删除 worktree** | 行内「删除」 | `git worktree remove [--force]` |
 | **批量清理** | 工具栏「清理陈旧」 | `git worktree remove --force` + `prune` |
+
+#### 更新分支对话框：操作完成后按钮要「退场」
+
+`git pull` 在已是最新时**仍然退出码 0**，输出里只有一句 `Already up to date.`。最初的实现只要 `ok` 就显示「更新完成」，而且对话框保持打开、主按钮一直是蓝色高亮——用户会以为「没成功」或者「还要再点一次」。
+
+现在的处理：
+
+| 情况 | 文案 | 按钮 |
+|---|---|---|
+| 拉到了新提交 | 更新完成，拉取了 **N** 个提交 · 上游 `origin/xxx` | 变「关闭」、去掉 primary 高亮 |
+| 已是最新 | 已经是最新，没有需要更新的提交 · 上游 `origin/xxx` | 同上 |
+| 失败 | 按原因给提示，可重试 | 保持 primary，可再次点击 |
+
+同时：取消按钮隐藏（已完成，留着没意义）、合并方式置灰（再改也不会生效）。
+
+**怎么判断「有没有真的更新」**：不解析 `Already up to date.` 文本（会随 git 版本、是否 rebase 变化），而是比较 pull 前后的 `HEAD`：
+
+```js
+const beforeRev = await git(wtPath, ['rev-parse', 'HEAD'])
+const res = await git(wtPath, args)
+const afterRev = await git(wtPath, ['rev-parse', 'HEAD'])
+const changed = beforeRev !== afterRev
+```
+
+有变化时再用 `git rev-list --count before..after` 算拉了几个提交。
+
+有一个状态复位细节：对话框里的「已完成」标志是闭包变量，关闭后重新打开会重新初始化，所以不会记住上次的「关闭」状态（有测试覆盖）。
+
 
 **未做**：cherry-pick、SSE 自动刷新、lock/unlock 的独立入口。
 
@@ -965,7 +994,7 @@ cp config.example.json config.json
 |---|---|---|
 | `fetch` | `{prune?:bool, forceTags?:bool}` | 更新仓库所有远程；`forceTags` 才会覆盖被重打的 tag |
 | `tag-inspect` | `{tag}` | 查某 tag 的本地/远端 sha（冲突时用于展示）|
-| `pull` | `{wt, mode:'ff-only'\|'rebase'\|'merge'}` | 更新某个 worktree 的分支 |
+| `pull` | `{wt, mode:'ff-only'\|'rebase'\|'merge'}` | 更新某个 worktree 的分支；返回 `changed` / `incoming` / `before` / `after` 供界面区分「已是最新」 |
 | `GET /api/repos/:id/file-history` | `?path=&wt=&follow=0&rev=` 单文件历史（含 pathAtCommit / 增删统计 / 改名信息） |
 | `GET /api/repos/:id/file-history-diff` | `?sha=&path=&wt=` 某个 commit 里该文件的 diff（path 必须是当时的路径） |
 | `GET /api/repos/:id/tree` | `?sha=&wt=` 某提交的完整文件树（sha 会解析成完整值） |
@@ -1052,6 +1081,7 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | 窄屏（<1180px）| 详情面板变右侧抽屉，点 commit 自动滑出；表格横向滚动 |
 | 分支被占用 | 切换/创建时明确报错并指出占用它的 worktree |
 | 分支无 upstream | 拉取时提示 `no-upstream`，不静默失败 |
+| 拉取时已经是最新 | 文案明确「已经是最新」，主按钮退成「关闭」不再高亮，避免误以为没成功 |
 | 本地远程已分叉 | `--ff-only` 报 `diverged`，可改用变基 |
 | 认证失败 | 提示"在终端里执行一次 fetch 以缓存凭据" |
 | 远端重打了 tag | **不算失败**：分支照常更新，对话框列出冲突 tag 的本地/远端 sha，默认保留本地 |
@@ -1158,6 +1188,9 @@ node test-linkify.mjs
 
 # UI：顶栏发布标签（28 项）
 node test-ui-tags.mjs
+
+# UI：更新分支对话框按钮退场（20 项）
+node test-ui-pull-dialog.mjs
 
 # UI：内容搜索（40 项，含接口与页面）
 node test-ui-grep.mjs

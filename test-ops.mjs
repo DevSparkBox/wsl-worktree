@@ -66,6 +66,19 @@ const check = (name, ok, detail = '') => {
   check('pull --ff-only 快进', r.status === 200 && r.body.ok, `${r.body.upstream}`)
   const n = sh(repo, ['rev-list', '--count', 'HEAD'])
   check('pull 后提交数增加', Number(n) === 2, `count=${n}`)
+  // changed 字段：界面据此区分「更新完成」和「已是最新」
+  check('有更新时 changed=true', r.body.changed === true, String(r.body.changed))
+  check('有更新时 incoming>0', r.body.incoming > 0, `${r.body.incoming} 个提交`)
+  check('有更新时前后 sha 不同', r.body.before && r.body.after && r.body.before !== r.body.after,
+    `${r.body.before?.slice(0, 7)} → ${r.body.after?.slice(0, 7)}`)
+
+  // 再 pull 一次：已是最新，changed 必须为 false
+  const again = await post(`/api/repos/${repoId}/pull`, { wt: repo, mode: 'ff-only' })
+  check('已是最新时仍 ok', again.status === 200 && again.body.ok === true, '')
+  check('已是最新时 changed=false', again.body.changed === false, String(again.body.changed))
+  check('已是最新时 incoming=0', again.body.incoming === 0, `${again.body.incoming}`)
+  check('已是最新时前后 sha 相同', again.body.before === again.body.after,
+    `${again.body.before?.slice(0, 7)} === ${again.body.after?.slice(0, 7)}`)
 
   // 无 upstream 的分支
   sh(repo, ['checkout', '-q', '-b', 'no-up'])
