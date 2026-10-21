@@ -9,6 +9,7 @@ import { scanRepos, parseWorktreePorcelainZ, parseStatusV2, suggestWorktreePath 
 import { parseNumstatZ } from './lib/numstat.mjs'
 import * as ops from './lib/ops.mjs'
 import { getFileHistory, getHistoryDiff, listFiles } from './lib/history.mjs'
+import { listTree, catFile } from './lib/tree.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
@@ -335,6 +336,42 @@ const server = createServer(async (req, res) => {
     if (mFiles) {
       const toplevel = dec(mFiles[1])
       const data = await listFiles(toplevel)
+      if (data.error) return json(res, 500, data)
+      return json(res, 200, data)
+    }
+
+    // ---------- 完整文件树（某 commit 的快照） ----------
+    const mTree = p.match(/^\/api\/repos\/([^/]+)\/tree$/)
+    if (mTree) {
+      const toplevel = dec(mTree[1])
+      const sha = url.searchParams.get('sha') || 'HEAD'
+      const wtPath = url.searchParams.get('wt')
+      let cwd = toplevel
+      if (wtPath) {
+        const wt = await resolveWorktree(toplevel, wtPath)
+        if (!wt) return json(res, 400, { error: 'unknown worktree', files: [] })
+        cwd = wt.path
+      }
+      const data = await listTree(cwd, sha)
+      if (data.error) return json(res, 500, data)
+      return json(res, 200, { ...data, cwd })
+    }
+
+    const mCat = p.match(/^\/api\/repos\/([^/]+)\/file-content$/)
+    if (mCat) {
+      const toplevel = dec(mCat[1])
+      const sha = url.searchParams.get('sha') || 'HEAD'
+      const path = url.searchParams.get('path') || ''
+      if (!path) return json(res, 400, { error: 'path required' })
+      const wtPath = url.searchParams.get('wt')
+      let cwd = toplevel
+      if (wtPath) {
+        const wt = await resolveWorktree(toplevel, wtPath)
+        if (!wt) return json(res, 400, { error: 'unknown worktree' })
+        cwd = wt.path
+      }
+      const data = await catFile(cwd, sha, path)
+      if (data.notFound) return json(res, 404, data)
       if (data.error) return json(res, 500, data)
       return json(res, 200, data)
     }

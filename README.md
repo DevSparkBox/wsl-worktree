@@ -85,6 +85,7 @@
 | 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
 | 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
+| 完整文件树 | 详情面板右上角「文件树」→ 新标签页（整仓库快照，左树右内容，仿 fork） |
 | 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
 | 键盘 | `r` 刷新，`/` 聚焦仓库搜索（左栏收起时聚焦顶栏切换器），`[` `]` 开关左右面板 |
 
@@ -157,6 +158,70 @@ if (hardFail || (res.code !== 0 && tagConflicts.length === 0)) return { ok: fals
 ```
 
 `otherErrors` 只统计以 `error:` / `fatal:` 开头的行，`! [rejected]` 不算——它后面跟的是 `(would clobber existing tag)` 这种说明，不是错误前缀。
+
+---
+
+## 完整文件树（独立标签页）
+
+看**某个提交当时的整个仓库**长什么样（不是只列改动文件）。入口在详情面板顶部右侧的「文件树」按钮，选中 commit 后出现。
+
+新标签页打开 `/tree.html`，仿 fork 的 File Tree：左树右内容。
+
+### 与「改动文件」的区别
+
+| | 内容 | 来源 |
+|---|---|---|
+| 改动文件 | 只有这个 commit 动过的文件 | `diff --numstat` |
+| 文件树 | 整个仓库在该提交时的快照 | `ls-tree -r` |
+
+### 页面特征
+
+- 树默认展开第一层（否则打开后只有一列折叠目录，得自己点才知道里面有什么）
+- 目录显示文件计数；文件显示大小，**hover 时大小让位给历史图标**，避免两列挤在一起
+- 每个文件行 hover 出现时钟图标 → 新标签页打开该文件的 history 页
+- 右侧显示文件内容（带行号），不做语法高亮（与 fork 一致）
+- 从文件行进来时 URL 带 `path`，进去自动定位并展开所在目录链
+- 过滤框支持模糊匹配，结果用**扁平列表**
+- 分隔线可拖动，宽度记在 `localStorage`
+
+### 三个验证过的点
+
+**① 性能：18k 文件 96ms**
+
+```
+git ls-tree -r -l -z --full-tree <sha>   → 18188 条，96ms
+```
+
+但**不能全量铺 DOM**。所以树只渲染「已展开路径上」的节点：默认展开第一层后只有 35 个目录 + 28 个文件在 DOM 里。
+
+**② `ls-tree -r` 只给文件，目录要前端自己推**
+
+不会出现空目录节点（git 不存空目录），所以按路径前缀在 `buildTree` 里推导目录是安全且准确的。
+
+**③ 过滤排序必须「文件名优先」**
+
+只用 `fuzzyScore` 会出问题。实测搜 `pom.xml` 时：
+
+```
+fuzzyScore('pom.xml', 'PlatformApplication.run.xml')
+```
+
+查询被切成 `pom` + `xml` 两段，`pom` 的 `p` 命中 `Platform` 段首、`xml` 命中 `run.xml` 段，得分**超过真正同名的 pom.xml**。结果前三行全是 `.run.xml` 文件。
+
+改成三级优先：
+
+```js
+if (name === ql) rank = 3000                    // 文件名完全相同
+else if (name.startsWith(ql)) rank = 2500 - …   // 文件名前缀
+else if (name.includes(ql)) rank = 2000 - …     // 文件名包含
+else rank = fuzzyScore(q, f.path)               // 兜底：路径模糊匹配
+```
+
+**④ 过滤结果必须显示目录**
+
+树形模式下靠层级区分同名文件，过滤成扁平列表后这个信息就丢了。实测搜 `README.md` 出 20 多条，每行都只显示 `README.md`，完全无法区分。
+
+所以过滤行额外显示所在目录（`backend/src/jcxx/light/cs`），且文件名不被压缩（`flex: 0 0 auto`），目录用 `direction: rtl` 从右侧截断保留末级。
 
 ---
 
@@ -561,6 +626,7 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── numstat.mjs         numstat -z 解析（含重命名）
 │   ├── ops.mjs             全部写操作（fetch/pull/checkout/create/remove/stale）
 │   ├── history.mjs         单文件历史（--follow / 改名路径 / numstat -z 解析）
+│   ├── tree.mjs            完整文件树（ls-tree -r -l -z / 文件内容读取）
 │   └── config.mjs          配置加载
 └── public\
     ├── index.html          单页骨架
@@ -572,7 +638,7 @@ E:\ai-spaces\tools\wsl-worktree\
     └── history.js          历史页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
 
 **源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
 改完源码执行：
@@ -664,6 +730,8 @@ cp config.example.json config.json
 | `pull` | `{wt, mode:'ff-only'\|'rebase'\|'merge'}` | 更新某个 worktree 的分支 |
 | `GET /api/repos/:id/file-history` | `?path=&wt=&follow=0&rev=` 单文件历史（含 pathAtCommit / 增删统计 / 改名信息） |
 | `GET /api/repos/:id/file-history-diff` | `?sha=&path=&wt=` 某个 commit 里该文件的 diff（path 必须是当时的路径） |
+| `GET /api/repos/:id/tree` | `?sha=&wt=` 某提交的完整文件树（sha 会解析成完整值） |
+| `GET /api/repos/:id/file-content` | `?sha=&path=&wt=` 某提交里某文件的内容（二进制/超大文件单独标记） |
 | `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
 | `checkout` | `{wt, branch?, detachAt?, create?, startPoint?}` | 切换分支；`detachAt` 可传 tag 名（后端写成 `refs/tags/<tag>` 消除歧义）/ 分支名 / sha |
 | `worktrees` | `{path, branch, mode:'new'\|'existing'\|'remote'\|'tag'\|'detach', base?, lock?}` | 创建；`mode:'tag'` 时 `base` 为 tag 名，`branch` 非空则同时建分支 |
@@ -757,6 +825,9 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 | 路径搜索输入过于精确 | 只匹配到 1 条也正常显示；无匹配显示「没有匹配的文件」 |
 | 历史页没带 path 打开 | 路径框显示「搜索文件…」，列表提示先选文件，不加载历史 |
 | 路径框打开但没输入就按 Esc | 一次收起（面板未展开时不拦截事件，直接交给外层处理） |
+| 文件树里 18k 文件 | 只渲染展开路径上的节点；默认展开第一层 35 目录 + 28 文件 |
+| 文件树里搜同名文件 | 文件名精确/前缀命中优先于路径模糊分；过滤结果行内显示所在目录 |
+| 文件树里的大文件 / 二进制 | 超大（>2MB）提示不在浏览器展示；二进制只看大小，不塞进 JSON |
 | 左栏收起 | 顶栏出现仓库切换器（带模糊搜索），不丢失换仓库的入口 |
 | 同名仓库在不同目录 | 顶栏候选显示目录前缀（`products/asset`）区分 |
 | 刷新页面 | 回到上次选中的仓库（hash 优先，localStorage 兜底），不再跳回第一个 |
@@ -818,6 +889,9 @@ node test-ui-file-history.mjs
 
 # UI：历史页顶栏路径切换器（25 项）
 node test-ui-path-picker.mjs
+
+# 接口+UI：完整文件树（31 项）
+node test-ui-file-tree.mjs
 ```
 
 `test-ops.mjs` 必须在 WSL 里跑（它用 `/tmp` 绝对路径造仓库，Windows 侧 node 会把路径转成 `\tmp\...`）。

@@ -178,6 +178,7 @@ async function selectRepo(toplevel, force = false) {
   state.selectedSha = null
   state.selectedFile = null
   state.logWt = null
+  syncFileTreeBtn()
   // 记住这次选择，刷新后能回到这里
   rememberRepo(toplevel)
   renderRepos()
@@ -447,6 +448,7 @@ $('btn-more').addEventListener('click', () => loadLog(false))
 async function selectCommit(sha) {
   state.selectedSha = sha
   state.selectedFile = null
+  syncFileTreeBtn()
   // 窄屏时把详情抽屉滑出（同步顶栏按钮状态，走同一个开关避免状态不一致）
   if (window.matchMedia('(max-width: 1180px)').matches && $('layout').classList.contains('hide-right')) {
     document.getElementById('toggle-right').click()
@@ -587,6 +589,34 @@ function openFileHistory(path, { focus = false } = {}) {
 $('btn-file-history').addEventListener('click', () => {
   openFileHistory(null, { focus: true })
 })
+
+// ---------- 完整文件树（新标签页） ----------
+/**
+ * 打开某提交的完整文件树。
+ * 与「改动文件」不同，这是整仓库在该提交时的快照（ls-tree）。
+ * path 可选：有值时定位到该文件，方便从文件行直接跳过去看上下文。
+ */
+function openFileTree(sha, path) {
+  if (!state.repo || !sha) return
+  const params = new URLSearchParams({ repo: state.repo.id, sha })
+  const wt = state.logWt || state.worktrees?.find((w) => w.isMain)?.path || state.repo.toplevel
+  if (wt) params.set('wt', wt)
+  if (path) params.set('path', path)
+  window.open(`/tree.html?${params}`, '_blank', 'noopener')
+}
+
+$('btn-file-tree').addEventListener('click', () => {
+  if (!state.selectedSha) return
+  // 带上当前选中的文件，进去就能看到它在整个仓库里的位置
+  openFileTree(state.selectedSha, state.selectedFile || null)
+})
+
+/** 「文件树」按钮只在选中了 commit 时出现 */
+function syncFileTreeBtn() {
+  const btn = $('btn-file-tree')
+  if (!btn) return
+  btn.hidden = !state.selectedSha
+}
 
 $('detail-close').addEventListener('click', () => setPanel('right', false))
 

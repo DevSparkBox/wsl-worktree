@@ -1,0 +1,354 @@
+/* ============================================================
+   完整文件树页（仿 fork 的 File Tree）
+   左侧树 + 右侧文件内容，沿用主界面配色。
+   ============================================================ */
+
+.tree-page {
+  margin: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 12px;
+  overflow: hidden;
+}
+
+/* ---------- 顶栏 ---------- */
+.t-topbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 0 12px;
+  height: 38px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.t-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  flex: none;
+}
+.t-repo {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  padding: 1px 6px;
+  background: var(--bg-alt);
+  border-radius: 4px;
+  flex: none;
+}
+.t-commit {
+  font-size: 11px;
+  color: var(--text-dim);
+  flex: none;
+}
+.t-subject {
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.t-stat { font-size: 11px; color: var(--text-faint); flex: none; }
+.t-wt {
+  font-size: 11px;
+  color: var(--text-faint);
+  background: var(--bg-alt);
+  padding: 1px 6px;
+  border-radius: 4px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: none;
+}
+
+/* ---------- 双栏 ---------- */
+.t-layout {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  --w-tree: 320px;
+}
+.t-tree-pane {
+  flex: none;
+  width: var(--w-tree);
+  min-width: 200px;
+  max-width: 60vw;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  min-height: 0;
+}
+.t-tree-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.t-filter {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  font: 11.5px var(--sans);
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+.t-filter:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.t-icon-btn {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.t-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+
+.t-tree-wrap {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 3px 0;
+}
+.t-tree { display: block; }
+
+/* ---------- 树节点 ---------- */
+.t-node {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px 2px 0;
+  cursor: pointer;
+  font-size: 11.5px;
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
+  position: relative;
+}
+.t-node:hover { background: var(--bg-hover); }
+.t-file.active { background: var(--accent-soft); }
+.t-file.active .t-name { color: var(--accent); font-weight: 500; }
+
+.t-caret {
+  flex: none;
+  width: 11px;
+  text-align: center;
+  font-size: 9px;
+  color: var(--text-faint);
+  line-height: 1;
+}
+.t-caret-hidden { visibility: hidden; }
+
+.t-ico { flex: none; color: var(--text-faint); }
+.t-dir .t-ico { color: var(--amber); }
+.t-dir.open .t-name { font-weight: 500; }
+
+.t-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+.t-count {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+.t-size {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  margin-left: 4px;
+}
+
+/* 行尾的「历史」图标：hover 才显形 */
+.t-node-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.t-file:hover .t-node-actions { opacity: 1; }
+.t-file:focus-within .t-node-actions { opacity: 1; }
+.t-hist-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.t-hist-btn:hover { background: var(--accent-soft); color: var(--accent); }
+
+.t-more {
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.t-empty {
+  padding: 14px;
+  color: var(--text-faint);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+/* ---------- 分隔线 ---------- */
+.t-splitter {
+  flex: none;
+  width: 5px;
+  cursor: col-resize;
+  position: relative;
+}
+.t-splitter::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: transparent;
+  transition: background 120ms;
+}
+.t-splitter:hover::after,
+.t-splitter.dragging::after { background: var(--accent); }
+
+/* ---------- 右侧文件内容 ---------- */
+.t-file-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel);
+}
+.t-file-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  min-height: 31px;
+}
+.t-file-path {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+  min-width: 0;
+}
+.t-file-meta {
+  flex: none;
+  font-size: 10.5px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+.t-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font: 11px var(--sans);
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.t-btn:hover { background: var(--bg-hover); color: var(--text); }
+.t-btn[hidden] { display: none; }
+
+.t-file-body {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
+/* 代码表：行号 + 内容 */
+.t-code-wrap { min-width: 100%; }
+.t-code {
+  border-collapse: collapse;
+  font: 11.5px/1.55 var(--mono);
+  tab-size: 4;
+  min-width: 100%;
+}
+.t-code td {
+  padding: 0 10px;
+  vertical-align: top;
+}
+.t-code td.ln {
+  width: 1%;
+  text-align: right;
+  color: var(--text-faint);
+  background: var(--bg-alt);
+  padding: 0 8px;
+  user-select: none;
+  font-size: 10.5px;
+  border-right: 1px solid var(--border);
+  /* 行号列固定在左侧，横向滚动时保持可见 */
+  position: sticky;
+  left: 0;
+}
+.t-code td.code {
+  white-space: pre;
+  color: var(--text);
+}
+
+/* hover 出历史图标时，先让文件大小让位——两列并排会挤成一团 */
+.t-file:hover .t-size { display: none; }
+/* 图标区固定宽度，hover 时不会让文件名左右跳动 */
+.t-node-actions { min-width: 16px; justify-content: flex-end; }
+
+/* 过滤模式下的目录提示：行内显示所在目录，用来区分同名文件 */
+.t-dir-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+/* 过滤模式下文件名不该被压缩：它是辨识主体 */
+.t-file .t-name { flex: 0 0 auto; max-width: 55%; }

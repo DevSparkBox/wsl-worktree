@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File Tree</title>
+<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/tree.css">
+</head>
+<body class="tree-page">
+
+<header class="t-topbar">
+  <div class="t-brand">
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M2 4.2c0-.7.6-1.3 1.3-1.3h2.6l1.4 1.6h5.4c.7 0 1.3.6 1.3 1.3v6c0 .7-.6 1.3-1.3 1.3H3.3c-.7 0-1.3-.6-1.3-1.3V4.2z"
+            stroke="currentColor" stroke-width="1.3" fill="none"/>
+    </svg>
+    <span>File Tree</span>
+  </div>
+  <span class="t-repo" id="t-repo"></span>
+  <span class="t-commit mono" id="t-commit" title="当前查看的提交"></span>
+  <span class="t-subject" id="t-subject"></span>
+  <div class="spacer"></div>
+  <span class="t-stat" id="t-stat"></span>
+  <span class="t-wt" id="t-wt" title="在哪个 worktree 中查看"></span>
+</header>
+
+<main class="t-layout" id="t-layout">
+  <!-- 左：文件树 -->
+  <section class="t-tree-pane">
+    <div class="t-tree-head">
+      <input class="t-filter" id="t-filter" placeholder="过滤路径…" spellcheck="false">
+      <button class="t-icon-btn" id="t-collapse-all" title="全部折叠">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" transform="rotate(90 6 6)"/>
+        </svg>
+      </button>
+    </div>
+    <div class="t-tree-wrap" id="t-tree-wrap">
+      <div class="t-tree" id="t-tree" role="tree"></div>
+      <div class="t-empty" id="t-tree-empty" hidden></div>
+    </div>
+  </section>
+
+  <div class="t-splitter" id="t-splitter" role="separator" aria-label="调整树宽度" title="拖动调整宽度，双击复位"></div>
+
+  <!-- 右：文件内容 -->
+  <section class="t-file-pane">
+    <div class="t-file-head">
+      <span class="t-file-path mono" id="t-file-path"></span>
+      <div class="spacer"></div>
+      <span class="t-file-meta" id="t-file-meta"></span>
+      <button class="t-btn" id="t-btn-history" title="在新标签页查看该文件的提交历史" hidden>
+        <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M8 4.8V8l2.2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        文件历史
+      </button>
+      <button class="t-btn" id="t-btn-copy-path" title="复制完整路径" hidden>复制路径</button>
+    </div>
+    <div class="t-file-body" id="t-file-body">
+      <div class="t-empty" style="padding:24px 16px">在左侧选择一个文件查看内容。</div>
+    </div>
+  </section>
+</main>
+
+<div class="h-toast" id="t-toast" hidden></div>
+
+<script type="module" src="/tree.js"></script>
+</body>
+</html>
