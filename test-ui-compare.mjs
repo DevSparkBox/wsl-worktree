@@ -267,15 +267,86 @@ check('分支标签显示尾段而非纯版本号',
   refInfo.value.versionOnly < refInfo.value.labels.length,
   `纯版本号 ${refInfo.value?.versionOnly}/${refInfo.value?.labels?.length}`)
 
-// 搜索过滤
-await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='fix';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
-await sleep(400)
+// 搜索过滤：用一个足够精确的词，命中数一定远小于默认的 100 条上限
+// （用 'fix' 这种常见词会命中上百条，被 slice(0,100) 截断，反而看不出过滤生效）
+await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='bug=1383107';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+await sleep(450)
 const searched = await ev(`({
   items: document.querySelectorAll('.c-menu-item').length,
   subjects: [...document.querySelectorAll('.c-menu-subject')].slice(0,3).map(e=>e.textContent.toLowerCase()),
 })`)
-check('浮层内搜索按标题过滤', searched.value?.items > 0 && searched.value?.items < menu.value?.items,
-  `${menu.value?.items} → ${searched.value?.items}`)
+check('浮层内搜索按标题过滤', searched.value?.items > 0 && searched.value?.items < 10,
+  `命中 ${searched.value?.items} 条`)
+
+// ---------- 按 tag / 分支搜索 ----------
+// 只搜最近 50 条的话，老 tag 指向的提交根本不在列表里（v5.5.10.55 是几个月前的）。
+// 现在数据源是「最近提交 + 全部 ref 尖端」，并且搜索会匹配 ref 名。
+const refLog = await (await fetch(`${API}/ref-log`)).json()
+const allRefs = (refLog.commits || []).flatMap((c) => c.refs || [])
+const someTag = allRefs.find((r) => /^tag:\s*v?\d/.test(r))?.replace(/^tag:\s*/, '')
+const someBranch = allRefs.find((r) => !/^tag:/.test(r) && r.includes('/') && !r.endsWith('/HEAD'))
+
+const searchKw = async (kw) => {
+  await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value=${JSON.stringify(kw)};i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+  await sleep(450)
+  return ev(`({
+    count: document.querySelectorAll('.c-menu-item').length,
+    firstSha: document.querySelector('.c-menu-item')?.dataset.sha?.slice(0, 8),
+    empty: document.querySelector('.c-menu-empty')?.textContent.replace(/\\s+/g, ' ').trim() || '',
+  })`)
+}
+
+check('数据源包含全部 ref 尖端（不只是最近 50 条）',
+  (refLog.commits || []).length > 100,
+  `${refLog.commits?.length} 条`)
+
+if (someTag) {
+  const byTag = await searchKw(someTag)
+  check('能按 tag 搜索', byTag.value?.count > 0,
+    `搜「${someTag}」→ ${byTag.value?.count} 条`)
+} else {
+  console.log('       (仓库里没有 tag，跳过 tag 搜索断言)')
+}
+
+if (someBranch) {
+  // 用分支名的最后一段（去掉 origin/ 前缀），更贴近用户会输入的片段
+  const frag = someBranch.replace(/^origin\//, '').split('/').pop()
+  const byBranch = await searchKw(frag)
+  check('能按分支名搜索', byBranch.value?.count > 0,
+    `搜「${frag}」→ ${byBranch.value?.count} 条`)
+} else {
+  console.log('       (仓库里没有分支，跳过分支搜索断言)')
+}
+
+// 搜不到时给出「按 Enter 直接当版本用」的出路
+const noHit = await searchKw('zzz-不存在的关键词-zzz')
+check('搜不到时提示可按 Enter 直接用',
+  noHit.value?.count === 0 && /按 Enter/.test(noHit.value?.empty || ''),
+  noHit.value?.empty?.slice(0, 46))
+
+// Enter 把输入当 rev：HEAD~3 不在索引里，但后端能解析
+// 先在搜索框里输入 HEAD~3（此时无匹配），再按 Enter
+await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='HEAD~3';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+await sleep(450)
+await ev(`document.getElementById('c-menu-search').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))`)
+await waitFor(`document.getElementById('c-menu').hidden`, 20000)
+await sleep(1500)
+const rawRev = await ev(`({
+  aVal: document.getElementById('c-a').value,
+  menuHidden: document.getElementById('c-menu').hidden,
+  stat: document.getElementById('c-stat').textContent,
+})`)
+check('无匹配时 Enter 把输入当版本使用',
+  rawRev.value?.menuHidden === true && /^[0-9a-f]{6,}$/.test(rawRev.value?.aVal || ''),
+  `A = ${rawRev.value?.aVal}`)
+
+// 恢复 A 再继续后面的断言
+await ev(`(()=>{const el=document.getElementById('c-a');el.value=${JSON.stringify(A)};el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))})()`)
+await waitFor(`document.getElementById('c-stat').textContent.includes('文件')`, 25000)
+await sleep(600)
+await ev(`document.getElementById('c-open-a').click()`)
+await waitFor(`document.querySelectorAll('.c-menu-item').length > 5`, 15000)
+await sleep(400)
 
 // 清空搜索，回到完整 50 条 —— 滚动相关的断言必须在「列表够长」时做
 await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)

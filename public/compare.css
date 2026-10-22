@@ -185,6 +185,13 @@
   font: 11.5px var(--sans);
   color: var(--text-faint);
   text-align: center;
+  line-height: 1.9;
+}
+/* 「按 Enter 直接当版本用」那行提示，比正文再淡一级 */
+.c-menu-hint {
+  font-size: 10.5px;
+  color: var(--text-faint);
+  opacity: .85;
 }
 .c-menu-foot {
   flex: none;

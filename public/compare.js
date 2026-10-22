@@ -56,7 +56,7 @@ const state = {
   selected: null,
   seq: 0,
   // A/B 选择器
-  recent: [],         // 最近提交缓存（浮层数据源）
+  commits: [],        // 提交索引：最近 N 条 + 全部 tag/分支尖端（浮层数据源）
   menuSide: null,     // 'a' | 'b'，浮层锚定到哪一侧
   menuItems: [],      // 当前浮层里渲染出的条目
   menuIndex: -1,      // 键盘高亮位置
@@ -104,19 +104,48 @@ async function loadRepoInfo() {
   document.title = `Compare · ${repo.name}`
 }
 
-/** 最近提交，只缓存到 state，由浮层按需渲染。
- * 只需要 URL 里的 repo id，不必等 /api/repos 返回，所以可以和它并行发。 */
-async function loadRecent(repoId) {
+/**
+ * 提交索引：最近 N 条 + **所有 tag / 分支尖端**。
+ *
+ * 只用最近 50 条的话，老 tag 指向的提交根本不在列表里——比如 v5.5.10.55
+ * 是几个月前的，用户想按 tag 找就搜不到。ref-log 覆盖了全部 1917 个 ref 尖端
+ * （jm_java 实测 103ms），合并后按时间倒序。
+ *
+ * 只依赖 URL 里的 repo id，不必等 /api/repos 返回，所以可以和它并行发。
+ */
+async function loadCommitIndex(repoId) {
   if (!repoId) return
   // 页面卸载/跳转时主动中断，避免控制台出现无意义的 "Failed to fetch"
   const ac = new AbortController()
   const onLeave = () => ac.abort()
   window.addEventListener('pagehide', onLeave, { once: true })
   try {
-    const res = await fetch(`/api/repos/${repoId}/log?count=50`, { signal: ac.signal })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const d = await res.json()
-    state.recent = d.commits || []
+    const [recentRes, refRes] = await Promise.all([
+      fetch(`/api/repos/${repoId}/log?count=50`, { signal: ac.signal }),
+      // ref-log 失败也不致命：至少还有最近 50 条可用
+      fetch(`/api/repos/${repoId}/ref-log`, { signal: ac.signal }).catch(() => null),
+    ])
+    if (!recentRes.ok) throw new Error(`HTTP ${recentRes.status}`)
+    const recent = (await recentRes.json()).commits || []
+    let refTips = []
+    if (refRes && refRes.ok) {
+      try { refTips = (await refRes.json()).commits || [] } catch {}
+    }
+
+    // 以 sha 合并：两边都可能包含对方没有的条目
+    const bySha = new Map()
+    for (const c of refTips) bySha.set(c.sha, { ...c })
+    for (const c of recent) {
+      const cur = bySha.get(c.sha)
+      if (cur) {
+        // %D 的 decorate 在新旧提交上可能略有差异，取并集
+        cur.refs = [...new Set([...(cur.refs || []), ...(c.refs || [])])]
+      } else {
+        bySha.set(c.sha, { ...c })
+      }
+    }
+    state.commits = [...bySha.values()].sort((a, b) => b.time - a.time)
+
     // 浮层已经打开（用户点得比请求快）时补渲染
     if (state.menuSide) {
       renderMenu($('c-menu-search').value)
@@ -127,9 +156,9 @@ async function loadRecent(repoId) {
     decoratePick('b', state.resolvedB)
   } catch (e) {
     // 被主动中断不算错误；其他原因至少要能在 console 里看到
-    if (e?.name !== 'AbortError') console.warn('[compare] 最近提交加载失败：', e?.message || e)
+    if (e?.name !== 'AbortError') console.warn('[compare] 提交列表加载失败：', e?.message || e)
     if (state.menuSide) {
-      $('c-menu-list').innerHTML = '<div class="c-menu-empty">最近提交加载失败，仍可直接粘贴 sha</div>'
+      $('c-menu-list').innerHTML = '<div class="c-menu-empty">提交列表加载失败，仍可直接粘贴 sha / tag</div>'
     }
   } finally {
     window.removeEventListener('pagehide', onLeave)
@@ -512,9 +541,16 @@ const inputEl = (side) => $(side === 'a' ? 'c-a' : 'c-b')
 function pickRefLabel(refs) {
   // refs 里 tag 可能带 "tag: " 前缀（`refs-at` / log 接口的格式），先归一化再判断，
   // 否则 `tag: v5.5.13.13` 不匹配版本号正则，会被当成普通分支（颜色也标错）。
+  // `%D` 还会把「HEAD 指向当前分支」写成 `HEAD -> main`，只保留分支名。
   const entries = (refs || [])
-    .map((r) => ({ name: String(r).replace(/^tag:\s*/, ''), isTag: /^tag:\s*/.test(r) }))
-    .filter((e) => e.name && e.name !== 'HEAD')
+    .map((r) => {
+      const isTag = /^tag:\s*/.test(r)
+      let name = String(r).replace(/^tag:\s*/, '')
+      if (/^HEAD -> /.test(name)) name = name.replace(/^HEAD -> /, '')
+      else if (name === 'HEAD') return null // 纯 detached HEAD，没有信息量
+      return name ? { name, isTag } : null
+    })
+    .filter(Boolean)
   if (!entries.length) return null
 
   // tag 一般不含 "/"；加这个条件避免把名为 `5.5.13.11-xxx` 的分支误判成 tag
@@ -540,20 +576,30 @@ function renderMenu(q = '') {
   const kw = q.trim().toLowerCase()
   const cur = inputEl(state.menuSide || 'a').value.trim()
 
-  if (!state.recent.length) {
+  if (!state.commits.length) {
     list.innerHTML = '<div class="c-menu-empty">加载中…</div>'
     return
   }
 
-  const items = state.recent
+  // 匹配 sha 前缀 / 提交信息 / **ref 名（tag 与分支）**
+  // 只匹配前两者的话，输入 `v5.5.10.55` 这种 tag 是搜不到的——
+  // tag 名往往不出现在提交信息里。
+  const items = state.commits
     .filter((c) => !kw
       || c.sha.toLowerCase().startsWith(kw)
-      || String(c.subject || '').toLowerCase().includes(kw))
+      || String(c.subject || '').toLowerCase().includes(kw)
+      || (c.refs || []).some((r) => r.toLowerCase().includes(kw)))
     .slice(0, 100)
 
   if (!items.length) {
-    list.innerHTML = '<div class="c-menu-empty">没有匹配的提交</div>'
+    // 搜不到时给出出路：输入的东西可能本身就是一个合法 rev（HEAD~5、分支名等）
+    const raw = q.trim()
+    list.innerHTML = raw
+      ? `<div class="c-menu-empty">没有匹配的提交<br>
+           <span class="c-menu-hint">按 Enter 直接把「${esc(raw)}」当作版本使用</span></div>`
+      : '<div class="c-menu-empty">没有匹配的提交</div>'
     state.menuItems = []
+    updateMenuFoot(0, Boolean(kw))
     return
   }
 
@@ -572,6 +618,25 @@ function renderMenu(q = '') {
   state.menuItems = items
   state.menuIndex = -1
   list.scrollTop = 0
+  updateMenuFoot(items.length, Boolean(kw))
+}
+
+/**
+ * 浮层底部提示：说明搜索范围。
+ * 数据源是「最近提交 + 全部 tag/分支尖端」，不是全部历史——
+ * 不写清楚用户会以为搜不到就是没有。
+ */
+function updateMenuFoot(shown, isFiltered = false) {
+  const el = $('c-menu-foot')
+  const total = state.commits.length
+  if (!total) { el.textContent = ''; return }
+  const scope = `共 ${total} 条（最近提交 + 全部 tag/分支尖端）`
+  if (isFiltered) {
+    // 搜索时的数字是「命中数」，不是「前 N 条」，措辞要区分开
+    el.textContent = `匹配 ${shown} 条 · ${scope}`
+  } else {
+    el.textContent = shown < total ? `显示前 ${shown} 条 · ${scope}` : scope
+  }
 }
 
 function placeMenu(side) {
@@ -593,7 +658,7 @@ function openMenu(side) {
   $('c-menu-search').value = ''
   renderMenu('')
   placeMenu(side)
-  if (state.recent.length) $('c-menu-search').focus()
+  if (state.commits.length) $('c-menu-search').focus()
 }
 
 function closeMenu() {
@@ -613,6 +678,15 @@ function pickCommit(sha) {
   applyFromInputs()
 }
 
+/** 直接把用户输入当成版本用（搜索无匹配时按 Enter） */
+function pickRawRev(rev) {
+  const side = state.menuSide
+  if (!side) return
+  inputEl(side).value = rev
+  closeMenu()
+  applyFromInputs()
+}
+
 function applyFromInputs() {
   const a = $('c-a').value.trim()
   const b = $('c-b').value.trim()
@@ -625,7 +699,7 @@ function applyFromInputs() {
 function decoratePick(side, fullSha) {
   const el = inputEl(side)
   if (!fullSha) return
-  const c = state.recent.find((x) => x.sha === fullSha)
+  const c = state.commits.find((x) => x.sha === fullSha)
   el.title = c ? `${fullSha}\n${c.subject || ''}\n${c.author || ''}` : fullSha
 }
 
@@ -675,7 +749,14 @@ function setupPickers() {
       e.preventDefault()
       const items = state.menuItems || []
       const target = items[state.menuIndex] || items[0]
-      if (target) pickCommit(target.sha)
+      if (target) {
+        pickCommit(target.sha)
+        return
+      }
+      // 一条都没匹配上：把输入内容当成 rev 直接用
+      // （HEAD~5、分支名、或者不在索引里的 sha，后端都能 rev-parse）
+      const raw = $('c-menu-search').value.trim()
+      if (raw) pickRawRev(raw)
     } else if (e.key === 'Escape') {
       e.preventDefault()
       closeMenu()
@@ -775,7 +856,7 @@ function setupPickers() {
   $('c-b').value = state.b
 
   // 最近提交和仓库信息并行拉：loadRecent 只依赖 URL 里的 repo id
-  const recentPromise = loadRecent(qs.get('repo'))
+  const commitIndexPromise = loadCommitIndex(qs.get('repo'))
 
   try {
     await loadRepoInfo()
@@ -786,5 +867,5 @@ function setupPickers() {
     $('c-empty').style.color = 'var(--red)'
   }
   // 下拉晚一点填完没关系，不阻塞主内容
-  recentPromise.catch(() => {})
+  commitIndexPromise.catch(() => {})
 })()

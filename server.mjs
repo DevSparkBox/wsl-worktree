@@ -11,8 +11,9 @@ import * as ops from './lib/ops.mjs'
 import { getFileHistory, getHistoryDiff, listFiles } from './lib/history.mjs'
 import { listTree, catFile } from './lib/tree.mjs'
 import { grepTree } from './lib/grep.mjs'
-import { refsAtCommit } from './lib/refs.mjs'
+import { refsAtCommit, listRefTipCommits } from './lib/refs.mjs'
 import { compareCommits, compareFile } from './lib/compare.mjs'
+import { LOG_FMT, parseLog } from './lib/logfmt.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
@@ -75,27 +76,6 @@ async function getWorktrees(toplevel, { withStatus = true } = {}) {
 }
 
 // ---------- 日志 / 对比 ----------
-const LOG_FMT = '%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e'
-
-function parseLog(raw) {
-  return raw
-    .split('\x1e')
-    .map((s) => s.replace(/^\n/, ''))
-    .filter(Boolean)
-    .map((rec) => {
-      const [sha, parents, author, email, at, refs, ...rest] = rec.split('\x1f')
-      return {
-        sha,
-        parents: parents ? parents.split(' ').filter(Boolean) : [],
-        author,
-        email,
-        time: Number(at) * 1000,
-        refs: refs ? refs.split(', ').filter(Boolean) : [],
-        subject: rest.join('\x1f'),
-      }
-    })
-}
-
 /**
  * 提交日志。
  * cwd 决定「在哪个 worktree 里看」：git 的 HEAD、索引、index 都属于单个 worktree，
@@ -418,6 +398,16 @@ const server = createServer(async (req, res) => {
       }
       const data = await refsAtCommit(cwd, sha)
       if (data.error) return json(res, 404, data)
+      return json(res, 200, data)
+    }
+
+    // ---------- 所有 ref 尖端的提交（给对比页的「最近提交」搜索用） ----------
+    // 只给最近 N 条的话，老 tag 指向的提交搜不到
+    const mRefLog = p.match(/^\/api\/repos\/([^/]+)\/ref-log$/)
+    if (mRefLog) {
+      const toplevel = dec(mRefLog[1])
+      const data = await listRefTipCommits(toplevel)
+      if (data.error) return json(res, 500, data)
       return json(res, 200, data)
     }
 

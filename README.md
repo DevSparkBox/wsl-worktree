@@ -30,8 +30,10 @@
 | 操作 | 说明 |
 |---|---|
 | A / B 输入框 | 可粘贴 sha / tag / 分支名 / `HEAD~n`，回车生效；悬停显示完整 sha + 提交标题 |
-| 输入框右侧 ▾ | 展开最近提交浮层（带搜索），点一条即选中并立即对比 |
+| 输入框右侧 ▾ | 展开提交浮层，点一条即选中并立即对比 |
 | 输入框内按 ↓ | 直接开列表，↑↓ 移动、Enter 选中、Esc 关闭 |
+| 浮层内搜索 | 匹配 **sha 前缀 / 提交信息 / tag 名 / 分支名** |
+| 搜索无结果时按 Enter | 把输入内容直接当版本用（`HEAD~5`、分支名、索引外的 sha 都行） |
 | ⇄ | 交换 A 和 B（增删行数会对调） |
 | 状态筛选 | 只列真实出现的状态（M/A/D/R），可多选；「全部」清空筛选 |
 | 过滤框 | 按路径模糊匹配，扁平列出命中 |
@@ -44,7 +46,24 @@
 另外两条调整：
 
 - **A 和 B 用同一个徽标底色**。之前 A 灰、B 蓝，会让人误以为 B 更「主要」或「更新」，但它们只是两个对等的端点。
-- **浮层里的 ref 标签收着显示**。完整 ref（`origin/hotfix/h-tag-5.5.13.11-主项问题修复1020`）塞进小徽章只会变成「origin/hotfix-」，所以分级降级：真 tag 原样显示（紫色），分支名里带版本号就只显示版本（`h-tag-5.5.13.11-xxx` → `v5.5.13.11`，灰色），都没有才留最后一段。完整名放 title。
+- **浮层里的 ref 标签收着显示**。完整 ref（`origin/hotfix/h-tag-5.5.13.11-主项问题修复1020`）塞进小徽章只会变成「origin/hotfix-」，所以分级降级：真 tag 原样显示（紫色），分支名里带版本号就取**版本号之后的尾段**（`h-tag-5.5.13.11-主项问题修复1020` → `主项问题修复1020`，灰色），都没有才留最后一段。完整名放 title。
+  注意不能只显示版本号——同一个版本号底下往往挂着好几条不同的 hotfix 分支，那样整列看起来全是 `v5.5.13.11`，信息量为零。
+
+### 浮层里的提交从哪来
+
+```
+最近 50 条提交（git log）
+  + 全部 tag / 分支尖端（git log --all --no-walk）
+  → 按 sha 合并去重 → 按时间倒序
+```
+
+只给最近 50 条的话，老 tag 指向的提交根本不在列表里——比如 `v5.5.10.55` 是几个月前的，用户想按 tag 找就永远搜不到。
+
+`git log --all --no-walk=unsorted` 一条命令就能拿到全部 ref 尖端，而且 `%D` 自带 decorate（`tag: v5.5.10.55, origin/main`），格式与普通 log 完全一致，可以直接复用同一个解析函数。jm_java（1881 tag + 195 分支 → 1917 个不同提交）实测 **48ms**。
+
+数据源约 2000 条，默认只渲染前 100 条，搜索在全部数据里过滤——纯前端，无请求。
+
+搜不到时会提示「按 Enter 直接把「xxx」当作版本使用」：输入的可能本来就是合法 rev（`HEAD~5`、分支名、或者不在 ref 上的 sha），没必要因为列表里没有就拦住。
 
 ### 三个实现要点
 
@@ -1046,6 +1065,7 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── grep.mjs            在 commit 快照里按内容搜索（git grep -z 解析）
 │   ├── refs.mjs            查 commit 上指向它的 tag / 分支（for-each-ref --points-at）
 │   ├── compare.mjs         两个提交之间的变更清单与单文件 patch
+│   ├── logfmt.mjs          commit log 的输出格式与解析（多处共用）
 │   └── config.mjs          配置加载
 └── public\
     ├── index.html          单页骨架
@@ -1149,6 +1169,7 @@ cp config.example.json config.json
 | `GET /api/repos/:id/tree?sha=&wt=` | 某提交的完整文件树（sha 会解析成完整值） |
 | `GET /api/repos/:id/file-content?sha=&path=&wt=` | 某提交里某文件的内容（二进制/超大文件单独标记） |
 | `GET /api/repos/:id/grep?sha=&q=&path=&i=1&re=1` | 在提交快照里按内容搜索（git grep） |
+| `GET /api/repos/:id/ref-log` | 全部 tag / 分支尖端指向的提交（对比页搜索用） |
 | `GET /api/repos/:id/compare?a=&b=` | 两提交间的变更文件（状态/增删/改名），rev 支持 sha/tag/分支 |
 | `GET /api/repos/:id/compare-file?a=&b=&path=&old=` | 单文件 patch；改名文件必须同时传 old |
 | `GET /api/repos/:id/refs-at?sha=&wt=` | 该提交上的 tag 与分支（annotated 会标记） |
@@ -1356,7 +1377,7 @@ node test-ui-tags.mjs
 # UI：更新分支对话框按钮退场（20 项）
 node test-ui-pull-dialog.mjs
 
-# UI：提交对比页（38 项，含接口与页面）
+# UI：提交对比页（61 项，含接口与页面）
 node test-ui-compare.mjs
 
 # UI：顶栏/日志表窄宽度排版（16 项）
