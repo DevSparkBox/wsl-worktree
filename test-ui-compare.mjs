@@ -254,9 +254,35 @@ const searched = await ev(`({
 check('浮层内搜索按标题过滤', searched.value?.items > 0 && searched.value?.items < menu.value?.items,
   `${menu.value?.items} → ${searched.value?.items}`)
 
-// 清空搜索后点第二条：应填入 A 并重新对比
+// 清空搜索，回到完整 50 条 —— 滚动相关的断言必须在「列表够长」时做
 await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
-await sleep(300)
+await sleep(350)
+const fullCount = await ev(`document.querySelectorAll('.c-menu-item').length`)
+check('清空搜索恢复完整列表', fullCount.value === menu.value?.items,
+  `${searched.value?.items} → ${fullCount.value}`)
+
+// 列表要能滚，而且「滚列表」不能把浮层关掉。
+// 曾经有 bug：window 的 scroll 监听用 capture 收所有滚动容器的事件，
+// 连浮层列表自己的滚动也算成「页面滚动」→ 一滚就关，表现成「滚轮没反应」。
+const scrollable = await ev(`(() => {
+  const el = document.getElementById('c-menu-list')
+  return { can: el.scrollHeight > el.clientHeight + 4, h: el.scrollHeight, c: el.clientHeight }
+})()`)
+check('浮层列表内容超出可视区（可滚动）', scrollable.value?.can === true,
+  `${scrollable.value?.c}/${scrollable.value?.h}px`)
+
+await ev(`document.getElementById('c-menu-list').scrollTop = 240`)
+await sleep(450)
+const afterScroll = await ev(`({
+  top: document.getElementById('c-menu-list').scrollTop,
+  visible: !document.getElementById('c-menu').hidden,
+})`)
+check('列表内滚动不关闭浮层', afterScroll.value?.top > 0 && afterScroll.value?.visible === true,
+  `scrollTop=${afterScroll.value?.top}`)
+await ev(`document.getElementById('c-menu-list').scrollTop = 0`)
+await sleep(200)
+
+// 点第二条：应填入 A 并重新对比
 const pickedSha = await ev(`(()=>{const it=document.querySelectorAll('.c-menu-item')[1]; if(!it) return null; const s=it.dataset.sha; it.click(); return s})()`)
 await waitFor(`document.getElementById('c-a').value === ${JSON.stringify((pickedSha.value || '').slice(0, 8))}`, 25000)
 await sleep(800)
@@ -283,6 +309,16 @@ await sleep(400)
 await ev(`document.getElementById('c-menu-search').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
 await sleep(300)
 check('Esc 关闭浮层', (await ev(`document.getElementById('c-menu').hidden`)).value === true, '')
+
+// 页面滚动仍应关闭浮层：锚点跟着滚会错位，与其错着不如关掉
+await ev(`document.getElementById('c-open-a').click()`)
+await sleep(500)
+await ev(`document.querySelector('.t-tree-wrap').scrollTop = 150`)
+await sleep(400)
+check('页面滚动关闭浮层（避免错位）',
+  (await ev(`document.getElementById('c-menu').hidden`)).value === true, '')
+await ev(`document.querySelector('.t-tree-wrap').scrollTop = 0`)
+await sleep(200)
 
 // 恢复成初始的 A（后续断言依赖初始对比结果）
 await ev(`(()=>{const el=document.getElementById('c-a');el.value=${JSON.stringify(A)};el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))})()`)

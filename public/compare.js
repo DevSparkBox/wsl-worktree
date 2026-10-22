@@ -689,7 +689,17 @@ function setupPickers() {
 
   // 窗口变化时浮层位置会失效，直接关掉比错位好
   window.addEventListener('resize', () => { if (state.menuSide) closeMenu() })
-  window.addEventListener('scroll', () => { if (state.menuSide) closeMenu() }, true)
+
+  // 锚点跟着页面滚动会错位，所以滚动时关闭浮层。
+  // 但必须用 capture 才能收到「任意滚动容器」的事件，而 capture 同时也会
+  // 捕获浮层列表自己的滚动——那样用户一滚列表就把浮层关了（表现成
+  // 「滚轮没反应」）。所以先排除浮层内部的滚动。
+  window.addEventListener('scroll', (e) => {
+    if (!state.menuSide) return
+    const t = e.target
+    if (t instanceof Element && t.closest('#c-menu')) return
+    closeMenu()
+  }, true)
 
   $('c-swap').addEventListener('click', () => {
     const a = $('c-a').value.trim()
