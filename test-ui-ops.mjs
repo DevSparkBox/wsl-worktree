@@ -75,8 +75,21 @@ await evaluate(`(() => {
 })()`)
 await sleep(2500)
 
-const btns = await evaluate(`['btn-fetch','btn-new-wt','btn-stale'].map(i => { const b = document.getElementById(i); return b ? b.textContent.trim() : null })`)
-check('工具栏三个按钮存在', btns.value?.every(Boolean), JSON.stringify(btns.value))
+const btns = await evaluate(`['btn-compare','btn-fetch','btn-new-wt','btn-stale'].map(i => { const b = document.getElementById(i); return b ? b.textContent.trim() : null })`)
+check('工具栏四个按钮存在', btns.value?.every(Boolean), JSON.stringify(btns.value))
+
+// 「对比」入口：点开应打开 compare.html，且带上 repo 与 a/b
+const cmpOpen = await evaluate(`(() => {
+  const seen = []
+  const orig = window.open
+  window.open = (u) => { seen.push(u); return null }
+  document.getElementById('btn-compare').click()
+  window.open = orig
+  return seen[0] || null
+})()`)
+check('对比按钮打开 compare 页',
+  /\/compare\.html\?repo=/.test(cmpOpen.value || '') && /[?&]a=/.test(cmpOpen.value || '') && /[?&]b=/.test(cmpOpen.value || ''),
+  cmpOpen.value?.replace(/^.*compare/, 'compare').slice(0, 60))
 
 const rowActs = await evaluate(`[...document.querySelectorAll('#wt-body tr:first-child .icon-btn')].map(b => b.textContent.trim() + (b.disabled ? '(禁)' : ''))`)
 check('行操作含 切换/拉取/删除', ['切换', '拉取', '删除'].every((k) => rowActs.value?.some((x) => x.startsWith(k))), JSON.stringify(rowActs.value))

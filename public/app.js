@@ -835,6 +835,15 @@ $('btn-fetch').addEventListener('click', async () => {
   await runFetch({ forceTags: false })
 })
 
+// 打开对比页：默认对比所选提交与其父提交（没选就用 HEAD~1..HEAD）
+$('btn-compare').addEventListener('click', () => {
+  if (!state.repo) return
+  const b = state.selectedSha || 'HEAD'
+  const a = state.selectedSha ? `${state.selectedSha}~1` : 'HEAD~1'
+  const url = `/compare.html?repo=${encodeURIComponent(state.repo.id)}&a=${encodeURIComponent(a)}&b=${encodeURIComponent(b)}`
+  window.open(url, '_blank')
+})
+
 async function runFetch({ forceTags = false } = {}) {
   if (!state.repo) return
   const btn = $('btn-fetch')

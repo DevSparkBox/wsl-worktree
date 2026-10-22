@@ -6,6 +6,87 @@
 
 ---
 
+## 提交对比
+
+选两个提交（sha / tag / 分支名都行），看两者之间的代码差异。**左侧树只列出有变更的文件**——这是它与文件树页的根本区别：数据源是 `git diff`，不是 `ls-tree` 的全量清单。
+
+```
+┌───────────────────────────────────────────────────────────┐
+│ 仓库  A:[HEAD~80 ▾]  ⇄  B:[HEAD ▾]      1254 文件 +270k −24k│
+├──────────────────┬────────────────────────────────────────┤
+│ 全部1254 M892 …  │  .run/jmpt.run.xml → backend/…          │
+│ ▾ .run           │  改名 75% · +5 −6                       │
+│   M Platform…    │  ┌────────────────────────────────────┐ │
+│     +3 −12       │  │ similarity index 75%                │ │
+│ ▾ backend/src 577│  │ rename from .run/jmpt.run.xml       │ │
+│   ▸ R jmpt.run...│  │ @@ -6,13 +6,12 @@                   │ │
+└──────────────────┴────────────────────────────────────────┘
+```
+
+**入口**：主界面工具栏「对比」（默认对比所选提交与其父提交，没选就 `HEAD~1..HEAD`），或直接开 `compare.html?repo=<id>&a=<rev>&b=<rev>`。
+
+**操作**
+
+| 操作 | 说明 |
+|---|---|
+| A / B 输入框 | 可粘贴 sha / tag / 分支名 / `HEAD~n`，回车生效 |
+| ⇄ | 交换 A 和 B（增删行数会对调） |
+| 最近提交下拉 | 填入**最后点击的那个输入框** |
+| 状态筛选 | 只列真实出现的状态（M/A/D/R），可多选；「全部」清空筛选 |
+| 过滤框 | 按路径模糊匹配，扁平列出命中 |
+| 折叠按钮 | 全部折叠 / 全部展开（默认全展开） |
+
+### 三个实现要点
+
+**① 两条 git 命令并行，各自补齐对方缺的信息**
+
+```bash
+git diff --find-renames --name-status -z A B   # 状态 A/M/D/R、改名相似度、旧新路径
+git diff --find-renames --numstat   -z A B     # 增删行数
+```
+
+- `--numstat` 能给出「+12」但分不清「新增文件」和「修改 +12」
+- `--name-status` 有状态但没有行数
+- 想用 `--raw --numstat` 一次拿全？不行，git 只输出前者
+
+实测 `HEAD~80..HEAD`（1254 文件）两次并行约 **550ms**。
+
+**② 改名文件的 patch 必须同时传新旧路径**
+
+这是最容易漏的点，实测结果：
+
+| 传给 `git diff -- <path>` | 显示成 |
+|---|---|
+| 只旧路径 | `deleted file` |
+| 只新路径 | `new file` |
+| **新旧都传** | `similarity 75% / rename from → to` |
+
+所以变更条目要保留 `oldPath`，`compare-file` 接口的两个路径一起传。
+
+**③ `-z` 的 name-status 格式**
+
+```
+M \0 path \0 M \0 path \0 ...        # 普通
+R075 \0 old \0 new \0                # 改名（相似度跟在 R 后面）
+```
+
+不能按 `\t` 切——路径里可能含 tab。也不能只按 `\0` 平铺，改名记录要多吃两个 token。
+
+### 交互细节
+
+- **树默认全展开**：只有有变更的目录才在树里，本身已很稀疏（1254 文件对应 777 目录）；折叠起来反而要点很多次
+- **目录节点显示**：变更文件数 + 该目录下增删行合计
+- **改名文件挂在「新路径」**：与 B 的文件树一致，树上标 `R`，tooltip 和右侧标题显示 `旧 → 新`
+- **二进制文件**：树上标 `BIN`（不显示行数），右侧提示无法逐行对比
+- **超大 patch**：2MB 截断并提示
+- **A == B**：直接提示「两个提交的内容完全相同」，不渲染空树
+
+### 复用
+
+`patch-view.js`（patch → 表格，与文件历史页共用）、`splitter.js`（左右拖动，与文件树页共用）、`tree-model.js`（建树 + 单链目录压缩）、`tree.css` / `history.css` 的节点与 diff 样式。
+
+---
+
 ## 布局
 
 左中右三栏，都能自由调整：
@@ -158,6 +239,7 @@ if (e.target.closest('a.ext-link')) return
 | 完整文件树 | 详情面板右上角「文件树」→ 新标签页（整仓库快照，左树右内容，仿 fork） |
 | 合并单链目录 | 文件树默认把 com/mysoft/jmpt 这类单链压成一行，可开关 |
 | 发布标签 | 文件树顶栏显示指向该提交的 tag（轻量/annotated 样式区分） |
+| **提交对比** | 选两个提交，左侧树只列出有变更的文件，右侧看单文件 diff |
 | 内容搜索 | 文件树里可切换「路径/内容」模式，在提交快照里 grep 并跳转到命中行 |
 | 语法高亮 | 文件内容按语言上色（TS/JS/Java/Vue/LESS/MD/SQL/XML 等），可开关 |
 | 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
@@ -953,6 +1035,7 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── tree.mjs            完整文件树（ls-tree -r -l -z / 文件内容读取）
 │   ├── grep.mjs            在 commit 快照里按内容搜索（git grep -z 解析）
 │   ├── refs.mjs            查 commit 上指向它的 tag / 分支（for-each-ref --points-at）
+│   ├── compare.mjs         两个提交之间的变更清单与单文件 patch
 │   └── config.mjs          配置加载
 └── public\
     ├── index.html          单页骨架
@@ -962,10 +1045,15 @@ E:\ai-spaces\tools\wsl-worktree\
     ├── linkify.js          commit message 里的 URL 转链接（白名单 + 转义）
     ├── history.html        单文件历史页（独立标签页）
     ├── history.css         历史页样式（双栏）
-    └── history.js          历史页逻辑
+    ├── history.js          历史页逻辑
+    ├── patch-view.js       unified patch → 带行号表格（历史页 / 对比页共用）
+    ├── splitter.js         左右分栏拖动（文件树页 / 对比页共用）
+    ├── compare.html        提交对比页
+    ├── compare.css         对比页样式（A/B 选择器、状态徽章、筛选）
+    └── compare.js          对比页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
 
 **源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
 改完源码执行：
@@ -1051,6 +1139,8 @@ cp config.example.json config.json
 | `GET /api/repos/:id/tree?sha=&wt=` | 某提交的完整文件树（sha 会解析成完整值） |
 | `GET /api/repos/:id/file-content?sha=&path=&wt=` | 某提交里某文件的内容（二进制/超大文件单独标记） |
 | `GET /api/repos/:id/grep?sha=&q=&path=&i=1&re=1` | 在提交快照里按内容搜索（git grep） |
+| `GET /api/repos/:id/compare?a=&b=` | 两提交间的变更文件（状态/增删/改名），rev 支持 sha/tag/分支 |
+| `GET /api/repos/:id/compare-file?a=&b=&path=&old=` | 单文件 patch；改名文件必须同时传 old |
 | `GET /api/repos/:id/refs-at?sha=&wt=` | 该提交上的 tag 与分支（annotated 会标记） |
 | `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
 | `POST /api/open` | `{target:'explorer'\|'wt', path}` 打开 Windows 程序 |
@@ -1255,6 +1345,9 @@ node test-ui-tags.mjs
 
 # UI：更新分支对话框按钮退场（20 项）
 node test-ui-pull-dialog.mjs
+
+# UI：提交对比页（38 项，含接口与页面）
+node test-ui-compare.mjs
 
 # UI：顶栏/日志表窄宽度排版（16 项）
 node test-ui-toolbar.mjs

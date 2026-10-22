@@ -12,6 +12,7 @@ import { getFileHistory, getHistoryDiff, listFiles } from './lib/history.mjs'
 import { listTree, catFile } from './lib/tree.mjs'
 import { grepTree } from './lib/grep.mjs'
 import { refsAtCommit } from './lib/refs.mjs'
+import { compareCommits, compareFile } from './lib/compare.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
@@ -417,6 +418,32 @@ const server = createServer(async (req, res) => {
       }
       const data = await refsAtCommit(cwd, sha)
       if (data.error) return json(res, 404, data)
+      return json(res, 200, data)
+    }
+
+    // ---------- 两个提交之间的代码对比 ----------
+    // a/b 支持 sha / tag / 分支名 / HEAD~n，内部会 rev-parse 成完整 sha
+    const mCmp = p.match(/^\/api\/repos\/([^/]+)\/compare$/)
+    if (mCmp) {
+      const toplevel = dec(mCmp[1])
+      const a = url.searchParams.get('a') || ''
+      const b = url.searchParams.get('b') || ''
+      if (!a || !b) return json(res, 400, { error: 'a 和 b 都必填', files: [] })
+      const data = await compareCommits(toplevel, a, b)
+      if (data.error) return json(res, 400, data)
+      return json(res, 200, data)
+    }
+
+    const mCmpFile = p.match(/^\/api\/repos\/([^/]+)\/compare-file$/)
+    if (mCmpFile) {
+      const toplevel = dec(mCmpFile[1])
+      const a = url.searchParams.get('a') || ''
+      const b = url.searchParams.get('b') || ''
+      const path = url.searchParams.get('path') || ''
+      const oldPath = url.searchParams.get('old') || ''
+      if (!a || !b || !path) return json(res, 400, { error: 'a / b / path 都必填' })
+      const data = await compareFile(toplevel, a, b, path, oldPath)
+      if (data.error) return json(res, 400, data)
       return json(res, 200, data)
     }
 

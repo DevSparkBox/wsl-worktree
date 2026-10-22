@@ -5,6 +5,7 @@
 
 import { fuzzyScore } from '/fuzzy.js'
 import { buildTree, countFiles, displayChainName } from '/tree-model.js'
+import { initSplitter } from '/splitter.js'
 import { detectLang, highlightLines } from '/highlight.js'
 
 const $ = (id) => document.getElementById(id)
@@ -649,45 +650,13 @@ function revealPath(path) {
 // ============================================================
 // 布局：拖动分隔线
 // ============================================================
-const SPLIT_KEY = 'wsl-worktree.treeWidth'
-;(function initSplitter() {
-  const layout = $('t-layout')
-  const sp = $('t-splitter')
-  let dragging = false
-
-  const saved = Number(localStorage.getItem(SPLIT_KEY))
-  if (Number.isFinite(saved) && saved >= 200) {
-    layout.style.setProperty('--w-tree', `${saved}px`)
-  }
-
-  const onMove = (e) => {
-    if (!dragging) return
-    const rect = layout.getBoundingClientRect()
-    const w = Math.min(Math.max(200, e.clientX - rect.left), Math.min(rect.width - 320, window.innerWidth * 0.6))
-    layout.style.setProperty('--w-tree', `${Math.round(w)}px`)
-    e.preventDefault()
-  }
-  const onUp = () => {
-    if (!dragging) return
-    dragging = false
-    sp.classList.remove('dragging')
-    document.body.style.cursor = ''
-    const w = parseInt(getComputedStyle(layout).getPropertyValue('--w-tree'), 10)
-    if (Number.isFinite(w)) localStorage.setItem(SPLIT_KEY, String(w))
-  }
-  sp.addEventListener('mousedown', (e) => {
-    dragging = true
-    sp.classList.add('dragging')
-    document.body.style.cursor = 'col-resize'
-    e.preventDefault()
-  })
-  window.addEventListener('mousemove', onMove)
-  window.addEventListener('mouseup', onUp)
-  sp.addEventListener('dblclick', () => {
-    layout.style.setProperty('--w-tree', '320px')
-    localStorage.setItem(SPLIT_KEY, '320')
-  })
-})()
+// 布局：拖动分隔线（实现见 splitter.js，与对比页共用）
+initSplitter({
+  layout: $('t-layout'),
+  splitter: $('t-splitter'),
+  storageKey: 'wsl-worktree.treeWidth',
+  defaultWidth: 320,
+})
 
 // ---------- 事件绑定 ----------
 // 输入框：按模式分发（路径过滤是纯前端，内容搜索要打接口）

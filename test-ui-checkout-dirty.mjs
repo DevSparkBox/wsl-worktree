@@ -16,7 +16,6 @@ const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const PORT = 9641
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-const WT = '/home/wangy/codes/jm_java-worktrees/h-tag-5.5.13.10-主项问题修复1016'
 const TARGET_FILE = '.gitignore'
 const REPO = '/home/wangy/codes/jm_java'
 
@@ -27,10 +26,31 @@ const wslQuiet = (cmd) => { try { return wsl(cmd) } catch { return '' } }
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(38)} ${d}`) }
 
+/**
+ * 动态挑一个干净、且在分支上的 worktree。
+ * 不能写死路径：worktree 会被删掉/重建，写死的话测试直接崩在 cd 上。
+ */
+async function pickCleanWorktree() {
+  const repos = await (await fetch('http://localhost:7801/api/repos')).json()
+  const rp = (repos.repos || []).find((r) => r.name === 'jm_java')
+  if (!rp) return null
+  const d = await (await fetch(`http://localhost:7801/api/repos/${rp.id}/worktrees`)).json()
+  const cand = (d.worktrees || []).find((w) => w.dirty === 0 && !w.detached && w.branch)
+  return cand ? cand.path : null
+}
+
 let browser = null
 let ws = null
+let WT = null
 
 try {
+  WT = await pickCleanWorktree()
+  if (!WT) {
+    console.log('SKIP  没有干净且带分支的 worktree，跳过本测试')
+    process.exit(0)
+  }
+  console.log(`      使用 worktree: ${WT}`)
+
   // 前置：确认干净，并找一个「该文件内容不同」的历史 commit（切过去才会冲突）
   const dirtyBefore = wsl(`cd "${WT}" && git status --porcelain | wc -l`)
   check('起始状态是干净的', Number(dirtyBefore) === 0, `${dirtyBefore} 项改动`)
@@ -88,16 +108,20 @@ try {
   await sleep(6500)
 
   // ---- 打开该 worktree 的切换对话框 ----
+  // 选择器在 Node 侧拼好再注入：直接写进模板字符串里的 WT 会在浏览器执行时未定义
+  const rowSel = `#wt-body tr[data-path=${JSON.stringify(WT)}]`
+  const nameHint = WT.split('/').pop().slice(0, 16)
   const opened = await ev(`(() => {
     const rows = [...document.querySelectorAll('#wt-body tr')]
-    const row = rows.find(r => r.textContent.includes('主项问题修复1016'))
+    const row = document.querySelector(${JSON.stringify(rowSel)})
+      || rows.find(r => r.textContent.includes(${JSON.stringify(nameHint)}))
     if (!row) return { ok: false, count: rows.length }
     const btn = [...row.querySelectorAll('button')].find(b => b.textContent.trim() === '切换')
     if (!btn) return { ok: false, buttons: [...row.querySelectorAll('button')].map(b => b.textContent.trim()) }
     btn.click()
     return { ok: true }
   })()`)
-  check('打开「切换分支」对话框', opened.value?.ok === true, opened.value?.buttons ? JSON.stringify(opened.value.buttons) : '')
+  check('打开「切换分支」对话框', opened.value?.ok === true, opened.value?.buttons ? JSON.stringify(opened.value.buttons) : `rows=${opened.value?.count}`)
   await sleep(2200)
 
   // ---- 填一个「该文件内容不同」的 commit，触发 dirty-conflict ----
@@ -176,10 +200,14 @@ try {
 
 } finally {
   // ---- 恢复现场：撤销制造的改动 ----
-  wslQuiet(`cd "${WT}" && git checkout -- ${TARGET_FILE}`)
-  await sleep(400)
-  const restored = wslQuiet(`cd "${WT}" && git status --porcelain | wc -l`)
-  check('测试结束后工作区已恢复干净', Number(restored) === 0, `${restored} 项改动`)
+  // WT 可能为 null（没挑到 worktree），且即使中途抛错这里也必须跑完，
+  // 否则会在用户仓库里留下一个 dirty 文件（之前就踩过）。
+  if (WT) {
+    wslQuiet(`cd "${WT}" && git checkout -- ${TARGET_FILE}`)
+    await sleep(400)
+    const restored = wslQuiet(`cd "${WT}" && git status --porcelain | wc -l`)
+    check('测试结束后工作区已恢复干净', Number(restored) === 0, `${restored} 项改动`)
+  }
 
   try { ws?.close() } catch {}
   try { browser?.kill() } catch {}

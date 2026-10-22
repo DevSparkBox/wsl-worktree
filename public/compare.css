@@ -1,0 +1,173 @@
+/* ============================================================
+   提交对比页
+   基础布局、树节点、patch 表格全部复用 tree.css / history.css，
+   这里只写本页特有的：A/B 选择器、状态徽章、筛选按钮、增删数字
+   ============================================================ */
+
+/* ---------- 顶栏：A/B 选择 ---------- */
+.c-topbar { gap: 6px; }
+
+.c-pickers {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  min-width: 0;
+}
+
+.c-pick {
+  display: flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  overflow: hidden;
+  height: 24px;
+}
+
+.c-pick-tag {
+  flex: none;
+  font: 600 10px var(--mono);
+  padding: 0 5px;
+  line-height: 24px;
+  color: #fff;
+}
+.c-pick-a { background: var(--text-faint); }
+.c-pick-b { background: var(--accent); }
+
+.c-sha {
+  width: 96px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: 11px var(--mono);
+  padding: 0 6px;
+  height: 22px;
+}
+.c-sha:focus { background: var(--accent-soft); }
+
+.c-swap {
+  flex: none;
+  width: 24px;
+  height: 24px;
+}
+.c-swap:hover { color: var(--accent); }
+
+.c-recent {
+  flex: none;
+  max-width: 190px;
+  height: 24px;
+  font: 10.5px var(--sans);
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  padding: 0 4px;
+  outline: none;
+}
+.c-recent:hover { border-color: var(--text-faint); }
+
+.c-back {
+  flex: none;
+  font: 11px var(--sans);
+  padding: 3px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  color: var(--text-dim);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.c-back:hover { background: var(--bg-hover); color: var(--text); }
+
+/* ---------- 状态筛选 ---------- */
+.c-filters {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+  flex-wrap: wrap;
+}
+.c-filters[hidden] { display: none; }
+
+.c-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font: 10.5px var(--mono);
+  padding: 2px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.c-filter-btn:hover { border-color: var(--text-faint); color: var(--text); }
+/* 「全部」的 on 态用中性色，避免和某个状态色混淆 */
+.c-filter-btn.on { background: var(--text); border-color: var(--text); color: #fff; }
+.c-filter-btn.on.c-badge-m { background: var(--amber); border-color: var(--amber); }
+.c-filter-btn.on.c-badge-a { background: var(--green); border-color: var(--green); }
+.c-filter-btn.on.c-badge-d { background: var(--red); border-color: var(--red); }
+.c-filter-btn.on.c-badge-r { background: var(--purple); border-color: var(--purple); }
+
+.c-filter-count {
+  font-size: 9.5px;
+  margin-left: 1px;
+  opacity: .75;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- 状态徽章 ---------- */
+.c-badge {
+  flex: none;
+  font: 9.5px/1.5 var(--mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  margin-left: 4px;
+  font-weight: 600;
+}
+.c-badge-m { background: var(--amber-soft); color: var(--amber); }
+.c-badge-a { background: var(--green-soft); color: var(--green); }
+.c-badge-d { background: var(--red-soft); color: var(--red); }
+.c-badge-r { background: var(--purple-soft); color: var(--purple); }
+.c-badge-bin { background: var(--bg-alt); color: var(--text-faint); }
+
+/* ---------- +N −N ---------- */
+.c-lines {
+  flex: none;
+  margin-left: auto;
+  padding-left: 6px;
+  display: flex;
+  gap: 5px;
+  font: 9.5px var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.c-add { color: var(--green); }
+.c-del { color: var(--red); }
+
+/* 树里的文件名可以被压缩，让 +N/−N 有位置 */
+.t-file .t-name, .t-dir .t-name { min-width: 0; }
+
+/* ---------- 右侧标题栏的状态 ---------- */
+.c-file-status {
+  flex: none;
+  font: 10px var(--mono);
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 8px;
+  font-weight: 600;
+}
+
+/* diff 表格占满宽度并允许横向滚动（长行不换行更易读） */
+.t-file-body { overflow: auto; }
+.t-file-body .h-patch-table { width: 100%; }
+
+/* 深层目录缩进大时文件名会很窄：把每层缩进从 13px 收到 11px 由 JS 控制，
+   这里只压缩徽章与行数的占位。 */
+.t-file .c-badge { margin-left: 5px; }
+.t-file .c-lines { padding-left: 5px; gap: 4px; }

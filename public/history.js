@@ -6,6 +6,7 @@
 
 import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
 import { linkify } from '/linkify.js'
+import { renderPatchTable } from '/patch-view.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -212,79 +213,6 @@ async function selectCommit(c) {
   } catch (err) {
     body.innerHTML = `<div class="empty" style="color:var(--red)">${esc(err.message)}</div>`
   }
-}
-
-/**
- * 把 patch 渲染成带行号的表格。
- * 文件名行（diff --git / index / --- / +++ 等）只保留一行摘要，避免占版面。
- */
-function renderPatchTable(patch) {
-  const table = document.createElement('table')
-  table.className = 'h-patch-table'
-  const tbody = document.createElement('tbody')
-
-  let oldNo = 0
-  let newNo = 0
-  let add = 0
-  let del = 0
-
-  for (const line of patch.split('\n')) {
-    if (line === '') continue
-    const tr = document.createElement('tr')
-    let cls = 'ctx'
-    let lnOld = ''
-    let lnNew = ''
-    let text = line
-
-    if (line.startsWith('@@')) {
-      cls = 'hunk'
-      // @@ -a,b +c,d @@ → 解析出起始行号
-      const m = line.match(/^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/)
-      if (m) {
-        oldNo = Number(m[1])
-        newNo = Number(m[2])
-      }
-      text = line
-    } else if (
-      line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') ||
-      line.startsWith('index ') || line.startsWith('new file') || line.startsWith('deleted file') ||
-      line.startsWith('similarity') || line.startsWith('rename ') || line.startsWith('old mode') ||
-      line.startsWith('new mode') || line.startsWith('Binary files') || line.startsWith('\\ No newline')
-    ) {
-      cls = 'meta'
-    } else if (line.startsWith('+')) {
-      cls = 'add'
-      lnNew = String(newNo++)
-      add++
-    } else if (line.startsWith('-')) {
-      cls = 'del'
-      lnOld = String(oldNo++)
-      del++
-    } else {
-      lnOld = String(oldNo++)
-      lnNew = String(newNo++)
-    }
-
-    if (cls === 'hunk') {
-      tr.className = 'hunk'
-      tr.innerHTML = `<td colspan="3">${esc(text)}</td>`
-    } else if (cls === 'meta') {
-      // diff --git / index / --- / +++ 四行是纯噪音（用户要看的不是这些），
-      // 只保留有信息量的行（new file / rename / Binary 等）
-      const noisy = line.startsWith('diff ') || line.startsWith('index ') ||
-        line.startsWith('--- ') || line.startsWith('+++ ')
-      if (noisy) continue
-      tr.className = 'meta'
-      tr.innerHTML = `<td colspan="3">${esc(text)}</td>`
-    } else {
-      tr.className = cls
-      tr.innerHTML =
-        `<td class="ln">${lnOld}</td><td class="ln">${lnNew}</td><td class="code">${esc(text)}</td>`
-    }
-    tbody.appendChild(tr)
-  }
-  table.appendChild(tbody)
-  return { table, add, del }
 }
 
 // ---------- 加载历史 ----------
