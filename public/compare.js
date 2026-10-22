@@ -495,10 +495,16 @@ const inputEl = (side) => $(side === 'a' ? 'c-a' : 'c-b')
  * 浮层里那一小块 ref 标签显示什么。
  *
  * 完整 ref 往往很长（origin/hotfix/h-tag-5.5.13.11-主项问题修复1020），
- * 塞进 140px 只会变成「…/h-tag-5.5.13.11-主项…」，反而更乱。所以分级降级：
- *   1. 真 tag → 原样显示（最能说明「这是哪个发布」）
- *   2. 分支名里带版本号 → 只显示版本号（h-tag-5.5.13.11-xxx → v5.5.13.11）
- *   3. 其余 → 去掉 origin/ 后，太长就留最后一段
+ * 塞进小徽章只会变成「…/h-tag-5.5.13.11-主项…」。但也不能只截版本号——
+ * 同一个版本号下面往往挂着好几条不同的 hotfix 分支，全显示成 v5.5.13.11
+ * 会让列表看起来「满屏重复标签」，反而分不清是哪个分支。
+ *
+ * 所以显示**各分支真正不同的部分**：
+ *   1. 真 tag → 原样（tag 名短且唯一，是「发布版本」的强信号）
+ *   2. 分支名带版本号 → 取版本号之后的尾巴
+ *      hotfix/h-tag-5.5.13.11-主项问题修复1020 → 主项问题修复1020
+ *      太长交给 CSS ellipsis 截，不在这里手工拼 …
+ *   3. 其余 → 去掉 origin/ 后的最后一段
  * 完整名字始终放在 title 里。
  *
  * 返回 { text, kind }，kind 用来区分 tag（紫）和分支（灰）。
@@ -511,16 +517,22 @@ function pickRefLabel(refs) {
     .filter((e) => e.name && e.name !== 'HEAD')
   if (!entries.length) return null
 
-  const tag = entries.find((e) => e.isTag || /^v?\d+\.\d+/.test(e.name))
+  // tag 一般不含 "/"；加这个条件避免把名为 `5.5.13.11-xxx` 的分支误判成 tag
+  const tag = entries.find((e) => e.isTag || (!e.name.includes('/') && /^v?\d+\.\d+/.test(e.name)))
   if (tag) return { text: tag.name, kind: 'tag' }
 
   const br = entries[0].name.replace(/^origin\//, '').replace(/^tags\//, '')
-  const ver = br.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/)
-  if (ver) return { text: `v${ver[1]}`, kind: 'branch' }
+
+  // 版本号之后的尾巴：h-tag-5.5.13.11-主项问题修复1020 → 主项问题修复1020
+  // 用非贪婪匹配到第一个完整版本号，再把紧跟的分隔符（- 或 _）吃掉。
+  const m = br.match(/^(.*?)(\d+\.\d+\.\d+(?:\.\d+)?)[-_]?(.+)$/)
+  if (m && m[3] && m[3].trim().length >= 2) {
+    return { text: m[3].trim(), kind: 'branch' }
+  }
+  // 没有版本号的普通分支
   if (br.length <= 18) return { text: br, kind: 'branch' }
   const segs = br.split('/').filter(Boolean)
-  const last = segs[segs.length - 1] || br
-  return { text: last.length <= 14 ? last : `${last.slice(0, 13)}…`, kind: 'branch' }
+  return { text: segs[segs.length - 1] || br, kind: 'branch' }
 }
 
 function renderMenu(q = '') {

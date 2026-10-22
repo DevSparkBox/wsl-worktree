@@ -244,6 +244,29 @@ check('只有被点的一侧高亮', menu.value?.aActive === true && menu.value?
 check('浮层自动聚焦搜索框', menu.value?.focused === 'c-menu-search', menu.value?.focused)
 check('每条显示标题与时间', menu.value?.hasSubject === true && menu.value?.hasWhen === true, '')
 
+// ref 标签必须有区分度。
+// 同一版本号（5.5.13.11）下面往往挂着好几条不同的 hotfix 分支，
+// 如果标签只显示版本号，整个列表看起来就「满屏 v5.5.13.11」，分不清是哪个分支。
+// 现在显示的是版本号之后的尾段（hotfix/h-tag-5.5.13.11-主项问题修复1020 → 主项问题修复1020）。
+const refInfo = await ev(`(() => {
+  const labels = [...document.querySelectorAll('.c-menu-ref')].map(e => e.textContent)
+  return {
+    labels,
+    uniq: [...new Set(labels)].length,
+    // 只显示版本号的标签（这种才有重复风险）
+    versionOnly: labels.filter(t => /^v?\\d+\\.\\d+\\.\\d+(\\.\\d+)?$/.test(t)).length,
+    hasTail: labels.some(t => /[\\u4e00-\\u9fa5]/.test(t)),
+  }
+})()`)
+check('ref 标签有区分度（不重复）',
+  (refInfo.value?.labels?.length || 0) > 0 &&
+  refInfo.value.uniq >= Math.ceil(refInfo.value.labels.length * 0.8),
+  `${refInfo.value?.labels?.length} 个标签 / ${refInfo.value?.uniq} 个不同`)
+check('分支标签显示尾段而非纯版本号',
+  refInfo.value?.hasTail === true &&
+  refInfo.value.versionOnly < refInfo.value.labels.length,
+  `纯版本号 ${refInfo.value?.versionOnly}/${refInfo.value?.labels?.length}`)
+
 // 搜索过滤
 await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='fix';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
 await sleep(400)
