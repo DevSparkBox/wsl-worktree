@@ -21,11 +21,18 @@
   </div>
   <span class="t-repo" id="c-repo"></span>
 
-  <!-- A / B 选择：输入框可直接粘贴 sha/tag/分支；下拉从最近提交里挑 -->
+  <!-- A / B 选择：每侧自包含 —— 可直接输入 sha/tag/分支，也可点 ▾ 从最近提交里挑。
+       之前是「两个输入框 + 一个全局下拉」，下拉填到哪个框取决于最后聚焦的输入框，
+       这是隐式约定，用户根本不知道会填哪边。 -->
   <div class="c-pickers">
-    <div class="c-pick">
-      <span class="c-pick-tag c-pick-a">A</span>
+    <div class="c-pick" id="c-pick-a">
+      <span class="c-pick-tag">A</span>
       <input class="c-sha mono" id="c-a" placeholder="sha / tag / 分支" spellcheck="false" autocomplete="off">
+      <button class="c-pick-open" id="c-open-a" title="从最近提交里选" aria-label="选择提交 A">
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
     <button class="t-icon-btn c-swap" id="c-swap" title="交换 A 和 B">
       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -33,13 +40,15 @@
               stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </button>
-    <div class="c-pick">
-      <span class="c-pick-tag c-pick-b">B</span>
+    <div class="c-pick" id="c-pick-b">
+      <span class="c-pick-tag">B</span>
       <input class="c-sha mono" id="c-b" placeholder="sha / tag / 分支" spellcheck="false" autocomplete="off">
+      <button class="c-pick-open" id="c-open-b" title="从最近提交里选" aria-label="选择提交 B">
+        <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+          <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </button>
     </div>
-    <select class="c-recent" id="c-recent" title="从最近提交里选（填入最后点击的那个输入框）">
-      <option value="">最近提交 …</option>
-    </select>
   </div>
 
   <div class="spacer"></div>
@@ -83,6 +92,13 @@
 </main>
 
 <div class="h-toast" id="c-toast" hidden></div>
+
+<!-- 最近提交浮层：锚定到当前点开的那一侧（A 或 B），fixed 定位不受顶栏裁剪影响 -->
+<div class="c-menu" id="c-menu" hidden>
+  <input class="c-menu-search" id="c-menu-search" placeholder="搜索 sha / 提交信息…" spellcheck="false" autocomplete="off">
+  <div class="c-menu-list" id="c-menu-list" role="listbox"></div>
+  <div class="c-menu-foot" id="c-menu-foot"></div>
+</div>
 
 <script type="module" src="/compare.js"></script>
 </body>

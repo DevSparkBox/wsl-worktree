@@ -202,17 +202,92 @@ check('默认全部展开', dirOpen.value === dirAll.value && dirAll.value > 0,
   `${dirOpen.value}/${dirAll.value} 个目录展开`)
 await shot('compare-page.png')
 
-// 最近提交下拉：放在首次加载后验证。
-// 后续测试会连续 Page.navigate，正在进行的 fetch 会被浏览器中断（Failed to fetch），
-// 那不是功能问题。
-const recentOk = await waitFor(`document.querySelectorAll('#c-recent option').length > 5`, 15000)
-const recentCount = await ev(`document.querySelectorAll('#c-recent option').length`)
-check('最近提交下拉已填充', recentCount.value > 5,
-  `${recentCount.value} 个 option${recentOk ? '' : '（等待超时）'}`)
-if (!recentOk) {
-  const diag = await ev(`({html: document.getElementById('c-recent')?.outerHTML?.slice(0,90), repo: document.getElementById('c-repo')?.textContent})`)
-  console.log('       诊断:', JSON.stringify(diag.value ?? diag.error))
-}
+// A/B 选择器：每侧自带 ▾，点开是最近提交浮层（不再有全局「最近提交」下拉）
+// 放在首次加载后验证：后续测试会连续 Page.navigate，正在进行的 fetch 会被中断
+await waitFor(`document.getElementById('c-open-a')`, 15000)
+
+const pickerShape = await ev(`({
+  openBtns: document.querySelectorAll('.c-pick-open').length,
+  legacySelect: Boolean(document.getElementById('c-recent')),
+  // A 和 B 用同一个徽标底色（不再一灰一蓝暗示主次）
+  sameTagBg: (() => {
+    const t = document.querySelectorAll('.c-pick-tag')
+    return t.length === 2 && getComputedStyle(t[0]).backgroundColor === getComputedStyle(t[1]).backgroundColor
+  })(),
+})`)
+check('每侧各有自己的展开按钮', pickerShape.value?.openBtns === 2, `${pickerShape.value?.openBtns} 个`)
+check('已移除全局「最近提交」下拉', pickerShape.value?.legacySelect === false, '')
+check('A/B 徽标样式一致（无主次暗示）', pickerShape.value?.sameTagBg === true, '')
+
+// 点 A 的 ▾
+await ev(`document.getElementById('c-open-a').click()`)
+const menuOk = await waitFor(`document.querySelectorAll('.c-menu-item').length > 5`, 15000)
+const menu = await ev(`({
+  visible: !document.getElementById('c-menu').hidden,
+  items: document.querySelectorAll('.c-menu-item').length,
+  aActive: document.getElementById('c-pick-a').classList.contains('active'),
+  bActive: document.getElementById('c-pick-b').classList.contains('active'),
+  focused: document.activeElement?.id,
+  hasSubject: (document.querySelector('.c-menu-subject')?.textContent || '').length > 3,
+  hasWhen: (document.querySelector('.c-menu-when')?.textContent || '').length > 0,
+  // 浮层应贴在 A 的下方
+  belowA: (() => {
+    const a = document.getElementById('c-pick-a').getBoundingClientRect()
+    const m = document.getElementById('c-menu').getBoundingClientRect()
+    return m.top >= a.bottom - 2 && Math.abs(m.left - a.left) < 40
+  })(),
+})`)
+check('点 ▾ 打开最近提交浮层', menu.value?.visible === true && menu.value?.items > 5,
+  `${menu.value?.items} 个提交${menuOk ? '' : '（等待超时）'}`)
+check('浮层锚定在被点的那一侧', menu.value?.belowA === true, '')
+check('只有被点的一侧高亮', menu.value?.aActive === true && menu.value?.bActive === false, '')
+check('浮层自动聚焦搜索框', menu.value?.focused === 'c-menu-search', menu.value?.focused)
+check('每条显示标题与时间', menu.value?.hasSubject === true && menu.value?.hasWhen === true, '')
+
+// 搜索过滤
+await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='fix';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+await sleep(400)
+const searched = await ev(`({
+  items: document.querySelectorAll('.c-menu-item').length,
+  subjects: [...document.querySelectorAll('.c-menu-subject')].slice(0,3).map(e=>e.textContent.toLowerCase()),
+})`)
+check('浮层内搜索按标题过滤', searched.value?.items > 0 && searched.value?.items < menu.value?.items,
+  `${menu.value?.items} → ${searched.value?.items}`)
+
+// 清空搜索后点第二条：应填入 A 并重新对比
+await ev(`(()=>{const i=document.getElementById('c-menu-search');i.value='';i.dispatchEvent(new Event('input',{bubbles:true}))})()`)
+await sleep(300)
+const pickedSha = await ev(`(()=>{const it=document.querySelectorAll('.c-menu-item')[1]; if(!it) return null; const s=it.dataset.sha; it.click(); return s})()`)
+await waitFor(`document.getElementById('c-a').value === ${JSON.stringify((pickedSha.value || '').slice(0, 8))}`, 25000)
+await sleep(800)
+const afterPick = await ev(`({
+  aVal: document.getElementById('c-a').value,
+  menuHidden: document.getElementById('c-menu').hidden,
+  aActive: document.getElementById('c-pick-a').classList.contains('active'),
+})`)
+check('点选后填入 A 并关闭浮层',
+  afterPick.value?.aVal === (pickedSha.value || '').slice(0, 8) && afterPick.value?.menuHidden === true,
+  `${pickedSha.value?.slice(0, 8)} → A`)
+check('选中后取消高亮', afterPick.value?.aActive === false, '')
+
+// 点外部关闭
+await ev(`document.getElementById('c-open-b').click()`)
+await sleep(500)
+await ev(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
+await sleep(300)
+check('点别处关闭浮层', (await ev(`document.getElementById('c-menu').hidden`)).value === true, '')
+
+// Esc 关闭
+await ev(`document.getElementById('c-open-a').click()`)
+await sleep(400)
+await ev(`document.getElementById('c-menu-search').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+await sleep(300)
+check('Esc 关闭浮层', (await ev(`document.getElementById('c-menu').hidden`)).value === true, '')
+
+// 恢复成初始的 A（后续断言依赖初始对比结果）
+await ev(`(()=>{const el=document.getElementById('c-a');el.value=${JSON.stringify(A)};el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))})()`)
+await waitFor(`document.getElementById('c-stat').textContent.includes('文件')`, 25000)
+await sleep(600)
 
 // 状态筛选：只看新增
 const beforeAll = init.value?.files

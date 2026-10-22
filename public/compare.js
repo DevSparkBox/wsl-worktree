@@ -55,7 +55,13 @@ const state = {
   statusFilter: new Set(), // 空 = 全部
   selected: null,
   seq: 0,
-  lastPickInput: 'c-a',
+  // A/B 选择器
+  recent: [],         // 最近提交缓存（浮层数据源）
+  menuSide: null,     // 'a' | 'b'，浮层锚定到哪一侧
+  menuItems: [],      // 当前浮层里渲染出的条目
+  menuIndex: -1,      // 键盘高亮位置
+  resolvedA: null,    // 后端解析出的完整 sha，用于给输入框挂 subject 提示
+  resolvedB: null,
 }
 
 async function api(path) {
@@ -98,7 +104,7 @@ async function loadRepoInfo() {
   document.title = `Compare · ${repo.name}`
 }
 
-/** 最近提交，填「从最近提交里选」下拉。
+/** 最近提交，只缓存到 state，由浮层按需渲染。
  * 只需要 URL 里的 repo id，不必等 /api/repos 返回，所以可以和它并行发。 */
 async function loadRecent(repoId) {
   if (!repoId) return
@@ -110,17 +116,21 @@ async function loadRecent(repoId) {
     const res = await fetch(`/api/repos/${repoId}/log?count=50`, { signal: ac.signal })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const d = await res.json()
-    const sel = $('c-recent')
-    for (const c of d.commits || []) {
-      const opt = document.createElement('option')
-      opt.value = c.sha
-      const refs = (c.refs || []).length ? `  [${c.refs.join(', ')}]` : ''
-      opt.textContent = `${c.sha.slice(0, 8)}  ${String(c.subject || '').slice(0, 60)}${refs}`
-      sel.appendChild(opt)
+    state.recent = d.commits || []
+    // 浮层已经打开（用户点得比请求快）时补渲染
+    if (state.menuSide) {
+      renderMenu($('c-menu-search').value)
+      $('c-menu-search').focus()
     }
+    // 已解析出的 A/B 补上 subject 提示
+    decoratePick('a', state.resolvedA)
+    decoratePick('b', state.resolvedB)
   } catch (e) {
     // 被主动中断不算错误；其他原因至少要能在 console 里看到
     if (e?.name !== 'AbortError') console.warn('[compare] 最近提交加载失败：', e?.message || e)
+    if (state.menuSide) {
+      $('c-menu-list').innerHTML = '<div class="c-menu-empty">最近提交加载失败，仍可直接粘贴 sha</div>'
+    }
   } finally {
     window.removeEventListener('pagehide', onLeave)
   }
@@ -151,8 +161,13 @@ async function loadCompare() {
   state.stats = data.stats || { files: 0, add: 0, del: 0, byStatus: {} }
   state.a = shortSha(data.a) || state.a
   state.b = shortSha(data.b) || state.b
+  state.resolvedA = data.a || null
+  state.resolvedB = data.b || null
   $('c-a').value = shortSha(data.a)
   $('c-b').value = shortSha(data.b)
+  // 输入框只有 8 位 sha，鼠标悬停能看到完整 sha + 提交标题，确认选对了没有
+  decoratePick('a', data.a)
+  decoratePick('b', data.b)
   syncUrl()
 
   const ms = Math.round(performance.now() - t0)
@@ -456,35 +471,231 @@ function setAb(a, b) {
   loadCompare()
 }
 
+// ---------- A / B 选择器：输入框 + 最近提交浮层 ----------
+//
+// 早先是「两个输入框 + 一个全局『最近提交』下拉」，下拉填到哪个框取决于
+// 最后聚焦的输入框——这是隐式约定，用户不知道会填哪边。现在每侧自带 ▾，
+// 浮层锚定在被点的那一侧，语义明确。
+
+function relTime(ms) {
+  if (!ms) return ''
+  const diff = (Date.now() - ms) / 1000
+  if (diff < 60) return '刚刚'
+  if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`
+  if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`
+  if (diff < 86400 * 30) return `${Math.floor(diff / 86400)} 天前`
+  if (diff < 86400 * 365) return `${Math.floor(diff / 86400 / 30)} 个月前`
+  return `${Math.floor(diff / 86400 / 365)} 年前`
+}
+
+const pickEl = (side) => $(side === 'a' ? 'c-pick-a' : 'c-pick-b')
+const inputEl = (side) => $(side === 'a' ? 'c-a' : 'c-b')
+
+/**
+ * 浮层里那一小块 ref 标签显示什么。
+ *
+ * 完整 ref 往往很长（origin/hotfix/h-tag-5.5.13.11-主项问题修复1020），
+ * 塞进 140px 只会变成「…/h-tag-5.5.13.11-主项…」，反而更乱。所以分级降级：
+ *   1. 真 tag → 原样显示（最能说明「这是哪个发布」）
+ *   2. 分支名里带版本号 → 只显示版本号（h-tag-5.5.13.11-xxx → v5.5.13.11）
+ *   3. 其余 → 去掉 origin/ 后，太长就留最后一段
+ * 完整名字始终放在 title 里。
+ *
+ * 返回 { text, kind }，kind 用来区分 tag（紫）和分支（灰）。
+ */
+function pickRefLabel(refs) {
+  // refs 里 tag 可能带 "tag: " 前缀（`refs-at` / log 接口的格式），先归一化再判断，
+  // 否则 `tag: v5.5.13.13` 不匹配版本号正则，会被当成普通分支（颜色也标错）。
+  const entries = (refs || [])
+    .map((r) => ({ name: String(r).replace(/^tag:\s*/, ''), isTag: /^tag:\s*/.test(r) }))
+    .filter((e) => e.name && e.name !== 'HEAD')
+  if (!entries.length) return null
+
+  const tag = entries.find((e) => e.isTag || /^v?\d+\.\d+/.test(e.name))
+  if (tag) return { text: tag.name, kind: 'tag' }
+
+  const br = entries[0].name.replace(/^origin\//, '').replace(/^tags\//, '')
+  const ver = br.match(/(\d+\.\d+\.\d+(?:\.\d+)?)/)
+  if (ver) return { text: `v${ver[1]}`, kind: 'branch' }
+  if (br.length <= 18) return { text: br, kind: 'branch' }
+  const segs = br.split('/').filter(Boolean)
+  const last = segs[segs.length - 1] || br
+  return { text: last.length <= 14 ? last : `${last.slice(0, 13)}…`, kind: 'branch' }
+}
+
+function renderMenu(q = '') {
+  const list = $('c-menu-list')
+  const kw = q.trim().toLowerCase()
+  const cur = inputEl(state.menuSide || 'a').value.trim()
+
+  if (!state.recent.length) {
+    list.innerHTML = '<div class="c-menu-empty">加载中…</div>'
+    return
+  }
+
+  const items = state.recent
+    .filter((c) => !kw
+      || c.sha.toLowerCase().startsWith(kw)
+      || String(c.subject || '').toLowerCase().includes(kw))
+    .slice(0, 100)
+
+  if (!items.length) {
+    list.innerHTML = '<div class="c-menu-empty">没有匹配的提交</div>'
+    state.menuItems = []
+    return
+  }
+
+  list.innerHTML = items.map((c) => {
+    // 当前这一侧已选中的那条给个静态标记，展开时能立刻确认「我现在选的是哪个」
+    const isCur = cur.length >= 6 && c.sha.startsWith(cur)
+    const ref = pickRefLabel(c.refs)
+    return `<div class="c-menu-item${isCur ? ' current' : ''}" data-sha="${esc(c.sha)}" role="option">
+      <span class="c-menu-sha">${esc(c.sha.slice(0, 8))}</span>
+      ${ref ? `<span class="c-menu-ref c-menu-ref-${ref.kind}" title="${esc(c.refs.join(', '))}">${esc(ref.text)}</span>` : ''}
+      <span class="c-menu-subject">${esc(c.subject || '(无标题)')}</span>
+      <span class="c-menu-when">${esc(relTime(c.time))}</span>
+    </div>`
+  }).join('')
+
+  state.menuItems = items
+  state.menuIndex = -1
+  list.scrollTop = 0
+}
+
+function placeMenu(side) {
+  const anchor = pickEl(side)
+  const r = anchor.getBoundingClientRect()
+  const menu = $('c-menu')
+  const w = menu.offsetWidth || 420
+  // 默认左对齐锚点；右侧放不下就往左挪，别被视口切掉
+  const left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8))
+  menu.style.left = `${Math.round(left)}px`
+  menu.style.top = `${Math.round(r.bottom + 4)}px`
+}
+
+function openMenu(side) {
+  state.menuSide = side
+  pickEl('a').classList.toggle('active', side === 'a')
+  pickEl('b').classList.toggle('active', side === 'b')
+  $('c-menu').hidden = false
+  $('c-menu-search').value = ''
+  renderMenu('')
+  placeMenu(side)
+  if (state.recent.length) $('c-menu-search').focus()
+}
+
+function closeMenu() {
+  $('c-menu').hidden = true
+  state.menuSide = null
+  state.menuIndex = -1
+  pickEl('a').classList.remove('active')
+  pickEl('b').classList.remove('active')
+}
+
+/** 选中一条：填进当前这一侧并立即对比 */
+function pickCommit(sha) {
+  const side = state.menuSide
+  if (!side) return
+  inputEl(side).value = sha.slice(0, 8)
+  closeMenu()
+  applyFromInputs()
+}
+
+function applyFromInputs() {
+  const a = $('c-a').value.trim()
+  const b = $('c-b').value.trim()
+  // 空值直接拦住：否则会变成空 rev，报错信息不如这一步清晰
+  if (!a || !b) { toast('A 和 B 都要填'); return }
+  setAb(a, b)
+}
+
+/** 把解析出的完整 sha 对应的提交标题挂到输入框 title 上 */
+function decoratePick(side, fullSha) {
+  const el = inputEl(side)
+  if (!fullSha) return
+  const c = state.recent.find((x) => x.sha === fullSha)
+  el.title = c ? `${fullSha}\n${c.subject || ''}\n${c.author || ''}` : fullSha
+}
+
+function moveMenuActive(delta) {
+  const items = [...$('c-menu-list').querySelectorAll('.c-menu-item')]
+  if (!items.length) return
+  state.menuIndex = Math.max(0, Math.min(items.length - 1, state.menuIndex + delta))
+  items.forEach((el, i) => el.classList.toggle('active', i === state.menuIndex))
+  const cur = items[state.menuIndex]
+  cur.scrollIntoView({ block: 'nearest' })
+}
+
 function setupPickers() {
-  for (const id of ['c-a', 'c-b']) {
-    const el = $(id)
-    // 记下最后聚焦的输入框，「最近提交」下拉就往它里面填
-    el.addEventListener('focus', () => { state.lastPickInput = id })
+  for (const side of ['a', 'b']) {
+    const el = inputEl(side)
     el.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') {
         e.preventDefault()
-        // 空值不让提交：否则会变成空 rev，报错信息不如直接拦住
-        const a = $('c-a').value.trim()
-        const b = $('c-b').value.trim()
-        if (!a || !b) { toast('A 和 B 都要填'); return }
-        setAb(a, b)
+        closeMenu()
+        applyFromInputs()
+      } else if (e.key === 'ArrowDown') {
+        // ↓ 直接开列表，比先去点 ▾ 顺手
+        e.preventDefault()
+        openMenu(side)
+        moveMenuActive(1)
       }
     })
+    // 点输入框空白处不自动展开（会挡住正在编辑的内容），但高亮这一侧
+    el.addEventListener('focus', () => {
+      pickEl('a').classList.toggle('active', side === 'a')
+      pickEl('b').classList.toggle('active', side === 'b')
+    })
+
+    $(side === 'a' ? 'c-open-a' : 'c-open-b').addEventListener('click', (e) => {
+      e.stopPropagation()
+      if (state.menuSide === side) closeMenu()
+      else openMenu(side)
+    })
   }
+
+  // 浮层内：搜索、键盘导航、点选
+  $('c-menu-search').addEventListener('input', (e) => renderMenu(e.target.value))
+  $('c-menu-search').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); moveMenuActive(1) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); moveMenuActive(-1) }
+    else if (e.key === 'Enter') {
+      e.preventDefault()
+      const items = state.menuItems || []
+      const target = items[state.menuIndex] || items[0]
+      if (target) pickCommit(target.sha)
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      closeMenu()
+      inputEl(state.menuSide || 'a')?.focus()
+    }
+  })
+
+  $('c-menu-list').addEventListener('click', (e) => {
+    const item = e.target.closest('.c-menu-item')
+    if (item) pickCommit(item.dataset.sha)
+  })
+
+  // 点别处关闭。
+  // e.target 不一定是 Element（document 本身、SVG 内外的一些节点），
+  // 直接调 closest 会抛 "closest is not a function"。
+  document.addEventListener('mousedown', (e) => {
+    if ($('c-menu').hidden) return
+    const t = e.target instanceof Element ? e.target : null
+    if (t && t.closest('#c-menu')) return
+    if (t && (t.closest('#c-pick-a') || t.closest('#c-pick-b'))) return
+    closeMenu()
+  })
+
+  // 窗口变化时浮层位置会失效，直接关掉比错位好
+  window.addEventListener('resize', () => { if (state.menuSide) closeMenu() })
+  window.addEventListener('scroll', () => { if (state.menuSide) closeMenu() }, true)
 
   $('c-swap').addEventListener('click', () => {
     const a = $('c-a').value.trim()
     const b = $('c-b').value.trim()
     if (!a || !b) return
     setAb(b, a)
-  })
-
-  $('c-recent').addEventListener('change', (e) => {
-    const v = e.target.value
-    if (!v) return
-    $(state.lastPickInput).value = v.slice(0, 8)
-    e.target.value = ''
   })
 
   // 过滤

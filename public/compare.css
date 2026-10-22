@@ -5,6 +5,8 @@
    ============================================================ */
 
 /* ---------- 顶栏：A/B 选择 ---------- */
+/* A 和 B 是两个对等的端点，所以用同一个徽标底色。
+   之前 A 灰、B 蓝，会让人误以为 B 更「主要」或「更新」。 */
 .c-topbar { gap: 6px; }
 
 .c-pickers {
@@ -22,18 +24,24 @@
   border-radius: 5px;
   background: var(--bg);
   overflow: hidden;
-  height: 24px;
+  height: 25px;
+  transition: border-color .12s, box-shadow .12s;
+}
+.c-pick:hover { border-color: var(--text-faint); }
+/* 正在编辑或浮层打开时高亮整块，用户能看出「操作的是哪一侧」 */
+.c-pick.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 .c-pick-tag {
   flex: none;
   font: 600 10px var(--mono);
-  padding: 0 5px;
-  line-height: 24px;
+  padding: 0 6px;
+  line-height: 25px;
   color: #fff;
+  background: var(--text-dim);
 }
-.c-pick-a { background: var(--text-faint); }
-.c-pick-b { background: var(--accent); }
 
 .c-sha {
   width: 96px;
@@ -43,30 +51,32 @@
   color: var(--text);
   font: 11px var(--mono);
   padding: 0 6px;
-  height: 22px;
+  height: 23px;
 }
-.c-sha:focus { background: var(--accent-soft); }
+
+/* 右侧 ▾：展开最近提交列表 */
+.c-pick-open {
+  flex: none;
+  width: 20px;
+  height: 23px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.c-pick-open:hover { background: var(--bg-hover); color: var(--text); }
 
 .c-swap {
   flex: none;
   width: 24px;
-  height: 24px;
+  height: 25px;
 }
 .c-swap:hover { color: var(--accent); }
-
-.c-recent {
-  flex: none;
-  max-width: 190px;
-  height: 24px;
-  font: 10.5px var(--sans);
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  background: var(--bg-panel);
-  color: var(--text-dim);
-  padding: 0 4px;
-  outline: none;
-}
-.c-recent:hover { border-color: var(--text-faint); }
 
 .c-back {
   flex: none;
@@ -79,6 +89,112 @@
   white-space: nowrap;
 }
 .c-back:hover { background: var(--bg-hover); color: var(--text); }
+
+/* ---------- 最近提交浮层 ---------- */
+.c-menu {
+  position: fixed;
+  z-index: 60;
+  width: 480px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .12);
+  overflow: hidden;
+}
+.c-menu[hidden] { display: none; }
+
+.c-menu-search {
+  flex: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  outline: none;
+  padding: 7px 10px;
+  font: 11.5px var(--sans);
+  background: var(--bg);
+  color: var(--text);
+}
+.c-menu-search:focus { background: var(--bg-panel); }
+
+.c-menu-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 3px 0;
+}
+
+.c-menu-item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.c-menu-item:hover,
+.c-menu-item.active {
+  background: var(--bg-hover);
+  border-left-color: var(--accent);
+}
+/* 当前 A / B 各自选中的那条，给个静态标记，便于展开时确认 */
+.c-menu-item.current { background: var(--accent-soft); }
+
+.c-menu-sha {
+  flex: none;
+  font: 10.5px var(--mono);
+  color: var(--text-faint);
+  width: 62px;
+}
+.c-menu-subject {
+  flex: 1;
+  min-width: 0;
+  font: 11.5px var(--sans);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-menu-when {
+  flex: none;
+  font: 10px var(--mono);
+  color: var(--text-faint);
+  width: 52px;
+  text-align: right;
+}
+.c-menu-ref {
+  flex: none;
+  font: 9.5px var(--mono);
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  align-self: center;
+}
+/* tag 用紫色（和文件树顶栏一致），分支用灰色——
+   两者含义不同：tag 是发布版本，分支是会移动的引用 */
+.c-menu-ref-tag { background: var(--purple-soft); color: var(--purple); }
+.c-menu-ref-branch { background: var(--bg-alt); color: var(--text-dim); }
+.c-menu-empty {
+  padding: 14px 10px;
+  font: 11.5px var(--sans);
+  color: var(--text-faint);
+  text-align: center;
+}
+.c-menu-foot {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 4px 10px;
+  font: 10px var(--sans);
+  color: var(--text-faint);
+  background: var(--bg-alt);
+}
+.c-menu-foot:empty { display: none; }
 
 /* ---------- 状态筛选 ---------- */
 .c-filters {
