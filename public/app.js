@@ -310,15 +310,14 @@ function renderWorktrees() {
     tr.appendChild(flags)
 
     const actions = document.createElement('td')
-    // 行内只留「更多」和「删除」：四个操作挤在一行会把表格撑得很宽，
-    // 而且每行都重复同样的文字按钮，扫视时很吵。
+    // 行内只留一个「更多」：五个文字按钮平铺会把表格撑得很宽，
+    // 每行重复同样的文字，扫视时也很吵。危险操作靠二次确认兜底，不用靠位置防误点。
     actions.innerHTML = `<div class="row-actions">
       <button class="icon-btn" data-act="menu" title="更多操作">
         <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
           <circle cx="3.2" cy="8" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="12.8" cy="8" r="1.25"/>
         </svg>
       </button>
-      <button class="icon-btn danger-hover" data-act="remove" title="删除此 worktree" ${wt.isMain ? 'disabled' : ''}>删除</button>
     </div>`
     tr.appendChild(actions)
     frag.appendChild(tr)
@@ -336,6 +335,7 @@ const ROW_ICONS = {
   folder: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.3c.4 0 .8.2 1 .5l.7 1h5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
   terminal: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 6.4L6.6 8l-2 1.6M8.4 10h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   vscode: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11.3 2.2L5.6 7.4 3.4 5.7 2 6.4v3.2l1.4.7 2.2-1.7 5.7 5.2 2.7-1.3V3.5l-2.7-1.3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M11.3 5.2v5.6" stroke="currentColor" stroke-width="1.2"/></svg>',
+  trash: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2a1 1 0 0 0 1 .8h3.8a1 1 0 0 0 1-.8l.6-8.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 }
 
 let rowMenuEl = null
@@ -464,6 +464,16 @@ function buildWtMenu(wt) {
           toast(unc)
         }
       },
+    },
+    { sep: true },
+    // 主工作区不能删（删了等于删仓库本身），禁掉并说明原因
+    {
+      icon: ROW_ICONS.trash,
+      label: '删除 worktree',
+      danger: true,
+      disabled: wt.isMain,
+      reason: wt.isMain ? '主工作区' : '',
+      onClick: () => openRemoveDialog(wt),
     },
   ]
 }

@@ -92,7 +92,7 @@ check('对比按钮打开 compare 页',
   cmpOpen.value?.replace(/^.*compare/, 'compare').slice(0, 60))
 
 const rowActs = await evaluate(`[...document.querySelectorAll('#wt-body tr:first-child .icon-btn')].map(b => b.dataset.act)`)
-check('行内只留「更多」和「删除」', JSON.stringify(rowActs.value) === JSON.stringify(['menu', 'remove']), JSON.stringify(rowActs.value))
+check('行内只留「更多」按钮', JSON.stringify(rowActs.value) === JSON.stringify(['menu']), JSON.stringify(rowActs.value))
 
 // ---------- 行内「更多」菜单 ----------
 await evaluate(`document.querySelector('#wt-body tr:first-child .icon-btn[data-act=menu]').click()`)
@@ -108,7 +108,7 @@ const menuPos = await evaluate(`(() => {
   return { below: mr.top >= ar.bottom - 2, inside: mr.right <= window.innerWidth }
 })()`)
 check('菜单含切换/拉取/打开类操作',
-  ['切换分支', '拉取上游', '用 VS Code 打开', '打开资源管理器', '在终端中打开'].every((k) => menuItems.value?.includes(k)),
+  ['切换分支', '拉取上游', '用 VS Code 打开', '打开资源管理器', '在终端中打开', '删除 worktree'].every((k) => menuItems.value?.includes(k)),
   JSON.stringify(menuItems.value))
 check('菜单项都有图标', menuIcons.value === menuItems.value?.length, `${menuIcons.value}/${menuItems.value?.length}`)
 check('菜单挂在 body 上（不被表格裁切）', menuParent.value === 'BODY', menuParent.value)
@@ -118,8 +118,17 @@ await evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubble
 await sleep(300)
 check('点外部关闭菜单', (await evaluate(`Boolean(document.querySelector('.row-menu'))`)).value === false, '')
 
-const mainRemoveDisabled = await evaluate(`document.querySelector('#wt-body tr:first-child .icon-btn[data-act=remove]')?.disabled`)
-check('主工作树删除按钮禁用', mainRemoveDisabled.value === true, String(mainRemoveDisabled.value))
+// 删除也进了菜单，主工作区的那一项应该是禁用的（并说明原因）
+await evaluate(`document.querySelector('#wt-body tr:first-child .icon-btn[data-act=menu]').click()`)
+await sleep(350)
+const mainRemove = await evaluate(`(() => {
+  const b = [...document.querySelectorAll('.row-menu-item')].find((x) => x.textContent.includes('删除 worktree'))
+  return b ? { exists: true, disabled: b.disabled, why: b.querySelector('.rmi-why')?.textContent || '' } : { exists: false }
+})()`)
+check('主工作树删除项禁用', mainRemove.value?.exists === true && mainRemove.value?.disabled === true,
+  JSON.stringify(mainRemove.value))
+await evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
+await sleep(300)
 
 await shot('ops-toolbar.png')
 
@@ -222,12 +231,18 @@ await evaluate(`document.getElementById('modal-close').click()`)
 await sleep(400)
 
 // ---------- 删除对话框（预检） ----------
+// 删除项在「更多」菜单里，先开菜单再点
 await evaluate(`(() => {
-  const rows = document.querySelectorAll('#wt-body tr')
+  const rows = [...document.querySelectorAll('#wt-body tr')]
   for (const tr of rows) {
-    const b = tr.querySelector('.icon-btn[data-act=remove]')
-    if (b && !b.disabled) { b.click(); return }
+    const menu = tr.querySelector('.icon-btn[data-act=menu]')
+    if (!menu) continue
+    menu.click()
+    const item = [...document.querySelectorAll('.row-menu-item')].find((x) => x.textContent.includes('删除 worktree'))
+    if (item && !item.disabled) { item.click(); return 'clicked' }
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
   }
+  return 'none'
 })()`)
 await sleep(2500)
 const rmTitle = await evaluate(`document.getElementById('modal-title').textContent`)
