@@ -1268,3 +1268,36 @@ body.resizing * { cursor: col-resize !important; }
   background: var(--border);
   margin: 4px 2px;
 }
+
+/* ---------- 日志顶部的「未提交的更改」 ---------- */
+.log-pending { cursor: pointer; }
+.log-pending td {
+  background: var(--bg-alt);
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.log-pending:hover td { background: var(--bg-hover); }
+.log-pending.selected td { background: var(--accent-soft); }
+
+.pending-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  margin-right: 7px;
+  position: relative;
+  top: -1px;
+}
+.pending-label { font-style: italic; color: var(--text); }
+.pending-stat {
+  margin-left: 10px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.pending-diff {
+  margin-left: 10px;
+  font: 10.5px var(--mono);
+}

@@ -9,7 +9,8 @@ import { scanRepos, parseWorktreePorcelainZ, parseStatusV2, suggestWorktreePath 
 import { parseNumstatZ } from './lib/numstat.mjs'
 import * as ops from './lib/ops.mjs'
 import { getFileHistory, getHistoryDiff, listFiles } from './lib/history.mjs'
-import { listTree, catFile } from './lib/tree.mjs'
+import { listTree, catFile, listWorktreeFiles, readWorktreeFile } from './lib/tree.mjs'
+import { getWorktreeChanges } from './lib/changes.mjs'
 import { grepTree } from './lib/grep.mjs'
 import { refsAtCommit, listRefTipCommits } from './lib/refs.mjs'
 import { compareCommits, compareFile } from './lib/compare.mjs'
@@ -128,23 +129,37 @@ async function getCommitStat(toplevel, sha) {
   return { files: parseNumstatZ(res.stdout), parents, isMerge: parents.length > 1 }
 }
 
-async function getFileDiff(toplevel, sha, path, mode = 'commit') {
+/**
+ * 取单文件 diff。
+ * @param {string} cwd  在哪个目录跑。worktree / staged 模式必须是**具体的 worktree 路径**，
+ *                      不能是 toplevel —— 未提交的改动是各 worktree 独立的一份。
+ */
+async function getFileDiff(cwd, sha, path, mode = 'commit') {
   let args
+  let allowExit1 = false
   if (mode === 'worktree') {
-    args = ['diff', '--no-color', '--no-ext-diff', '-U3', 'HEAD', '--', path]
+    // 未跟踪文件对 `git diff HEAD` 不可见，得跟 /dev/null 比；这种用法正常返回 1
+    const tracked = await git(cwd, ['ls-files', '--error-unmatch', '--', path], { timeout: 8000 })
+    if (tracked.code !== 0) {
+      args = ['diff', '--no-index', '--no-color', '--no-ext-diff', '-U3', '--', '/dev/null', path]
+      allowExit1 = true
+    } else {
+      args = ['diff', '--no-color', '--no-ext-diff', '-U3', 'HEAD', '--', path]
+    }
   } else if (mode === 'staged') {
     args = ['diff', '--cached', '--no-color', '--no-ext-diff', '-U3', '--', path]
   } else {
     // 与 getCommitStat 保持同一语义：root 用 show，其余用 diff p1..sha
-    const parents = await getParents(toplevel, sha)
+    const parents = await getParents(cwd, sha)
     if (parents.length === 0) {
       args = ['show', '--format=', '--no-color', '--no-ext-diff', '-U3', '--find-renames', sha, '--', path]
     } else {
       args = ['diff', '--no-color', '--no-ext-diff', '-U3', '--find-renames', parents[0], sha, '--', path]
     }
   }
-  const res = await git(toplevel, args, { maxBytes: cfg.maxPatchBytes, timeout: 30000 })
-  return { patch: res.stdout.slice(0, cfg.maxPatchBytes), truncated: res.stdout.length >= cfg.maxPatchBytes, error: res.code === 0 ? null : res.stderr }
+  const res = await git(cwd, args, { maxBytes: cfg.maxPatchBytes, timeout: 30000 })
+  const ok = res.code === 0 || (allowExit1 && res.code === 1)
+  return { patch: res.stdout.slice(0, cfg.maxPatchBytes), truncated: res.stdout.length >= cfg.maxPatchBytes, error: ok ? null : res.stderr }
 }
 
 // ---------- 打开 Windows 程序 ----------
@@ -315,9 +330,18 @@ const server = createServer(async (req, res) => {
       return json(res, 200, { ...data, cwd })
     }
 
-    const mCommit = p.match(/^\/api\/repos\/([^/]+)\/commit\/([0-9a-f]{4,40})$/)
+    const mCommit = p.match(/^\/api\/repos\/([^/]+)\/commit\/([0-9a-f]{4,40}|WORKTREE)$/)
     if (mCommit) {
       const toplevel = dec(mCommit[1])
+      if (mCommit[2] === 'WORKTREE') {
+        // 工作区：必须在具体的 worktree 里跑，各 worktree 的未提交改动互相独立
+        const wtParam = url.searchParams.get('wt')
+        const wt = wtParam ? await resolveWorktree(toplevel, wtParam) : { path: toplevel }
+        if (!wt) return json(res, 400, { error: 'unknown worktree', files: [] })
+        const data = await getWorktreeChanges(wt.path)
+        if (data.error) return json(res, 500, data)
+        return json(res, 200, { ...data, sha: 'WORKTREE', parents: [], worktree: wt.path })
+      }
       const data = await getCommitStat(toplevel, mCommit[2])
       if (data.error) return json(res, 500, data)
       return json(res, 200, data)
@@ -328,8 +352,16 @@ const server = createServer(async (req, res) => {
       const toplevel = dec(mDiff[1])
       const sha = url.searchParams.get('sha') || ''
       const path = url.searchParams.get('path') || ''
-      const mode = url.searchParams.get('mode') || 'commit'
-      const data = await getFileDiff(toplevel, sha, path, mode)
+      // 未提交改动的 diff 必须在具体 worktree 里跑（各 worktree 一份）
+      const wtParam = url.searchParams.get('wt')
+      let cwd = toplevel
+      if (wtParam) {
+        const wt = await resolveWorktree(toplevel, wtParam)
+        if (!wt) return json(res, 400, { error: 'unknown worktree', patch: '' })
+        cwd = wt.path
+      }
+      const mode = url.searchParams.get('mode') || (sha === 'WORKTREE' ? 'worktree' : 'commit')
+      const data = await getFileDiff(cwd, sha, path, mode)
       return json(res, 200, data)
     }
 
@@ -392,7 +424,7 @@ const server = createServer(async (req, res) => {
         if (!wt) return json(res, 400, { error: 'unknown worktree', files: [] })
         cwd = wt.path
       }
-      const data = await listTree(cwd, sha)
+      const data = sha === 'WORKTREE' ? await listWorktreeFiles(cwd) : await listTree(cwd, sha)
       if (data.error) return json(res, 500, data)
       return json(res, 200, { ...data, cwd })
     }
@@ -410,7 +442,10 @@ const server = createServer(async (req, res) => {
         if (!wt) return json(res, 400, { error: 'unknown worktree' })
         cwd = wt.path
       }
-      const data = await catFile(cwd, sha, path)
+      // 工作区视图读磁盘：用户改了什么就显示什么，不是索引也不是某个提交
+      const data = sha === 'WORKTREE'
+        ? await readWorktreeFile(cwd, path, cfg.maxPatchBytes)
+        : await catFile(cwd, sha, path)
       if (data.notFound) return json(res, 404, data)
       if (data.error) return json(res, 500, data)
       return json(res, 200, data)

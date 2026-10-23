@@ -373,7 +373,9 @@ if (e.target.closest('a.ext-link')) return
 | 合并单链目录 | 文件树默认把 com/mysoft/jmpt 这类单链压成一行，可开关 |
 | 发布标签 | 文件树顶栏显示指向该提交的 tag（轻量/annotated 样式区分） |
 | **提交对比** | 选两个提交，左侧树只列出有变更的文件，右侧看单文件 diff |
+| **未提交的更改** | 日志顶部一行，点开看未提交文件清单 + diff；文件树可切到「工作区」看当前磁盘状态 |
 | **克隆仓库** | 从远程地址克隆到扫描根下，实时进度，完成后自动入列表 |
+| **未提交的更改** | 日志顶部一行，点开看未提交文件清单 + diff；文件树可切到「工作区」看磁盘当前状态 |
 | **符号大纲** | 文件树页右侧列出当前文件的类型与函数，树形嵌套、点击跳转、滚动联动 |
 | 内容搜索 | 左侧切到「搜索」视图，在提交快照里 grep 并跳转到命中行 |
 | 语法高亮 | 文件内容按语言上色（TS/JS/Java/Vue/LESS/MD/SQL/XML 等），可开关 |
@@ -1180,6 +1182,7 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── refs.mjs            查 commit 上指向它的 tag / 分支（for-each-ref --points-at）
 │   ├── compare.mjs         两个提交之间的变更清单与单文件 patch
 │   ├── clone.mjs           克隆任务（长任务走 job + 轮询，解析 git 进度）
+│   ├── changes.mjs         某个 worktree 的未提交改动（diff HEAD + 未跟踪）
 │   ├── logfmt.mjs          commit log 的输出格式与解析（多处共用）
 │   └── config.mjs          配置加载
 └── public\
@@ -1200,7 +1203,7 @@ E:\ai-spaces\tools\wsl-worktree\
     └── compare.js          对比页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-clone.mjs`、`test-symbols.mjs`、`test-ui-outline.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-pending.mjs`、`test-clone.mjs`、`test-symbols.mjs`、`test-ui-outline.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
 
 **源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
 改完源码执行：
@@ -1286,6 +1289,7 @@ cp config.example.json config.json
 | `GET /api/repos/:id/tree?sha=&wt=` | 某提交的完整文件树（sha 会解析成完整值） |
 | `GET /api/repos/:id/file-content?sha=&path=&wt=` | 某提交里某文件的内容（二进制/超大文件单独标记） |
 | `GET /api/repos/:id/grep?sha=&q=&path=&i=1&re=1` | 在提交快照里按内容搜索（git grep） |
+| `GET /api/repos/:id/commit/WORKTREE?wt=` | 未提交改动清单（工作区+暂存 vs HEAD） |
 | `POST /api/clone` | 启动克隆任务，body: { url, dir, depth1?, submodules? } → { id } |
 | `GET /api/clone/:id` | 查克隆进度 { status, phase, percent, rate, error } |
 | `GET /api/repos/:id/ref-log` | 全部 tag / 分支尖端指向的提交（对比页搜索用） |
@@ -1495,6 +1499,9 @@ node test-ui-tags.mjs
 
 # UI：更新分支对话框按钮退场（20 项）
 node test-ui-pull-dialog.mjs
+
+# 未提交更改的三个数据源（19 项，需在 WSL 跑）
+wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-pending.mjs . && node test-pending.mjs'
 
 # 克隆仓库（进度解析 + 接口 + 端到端，20 项）
 node test-clone.mjs

@@ -891,3 +891,42 @@
   100% { background: transparent; }
 }
 .o-jump-flash { animation: o-flash 1.2s ease-out; }
+
+/* ---------- 顶部的「提交 / 工作区」切换 ---------- */
+.t-scope {
+  flex: none;
+  display: flex;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--bg);
+}
+.t-scope-btn {
+  font: 10.5px var(--sans);
+  padding: 3px 9px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.t-scope-btn + .t-scope-btn { border-left: 1px solid var(--border); }
+.t-scope-btn:hover { background: var(--bg-hover); color: var(--text); }
+.t-scope-btn.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* 工作区视图：未跟踪的新文件 */
+.t-file.is-new .t-name { color: var(--green); }
+.t-new {
+  flex: none;
+  font: 9px var(--sans);
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--green-soft);
+  color: var(--green);
+  margin-left: 6px;
+}

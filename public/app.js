@@ -14,6 +14,7 @@ const state = {
   logFilter: '',
   commitsAll: [],      // 未过滤的当前批
   selectedSha: null,
+  pending: null,       // 当前 worktree 的未提交改动摘要 { count, add, del, untracked, wt }
   selectedFile: null,
   detailFiles: [],
 }
@@ -520,6 +521,32 @@ $('wt-body').addEventListener('dblclick', (e) => {
 })
 
 // ---------- log ----------
+/**
+ * 取当前日志 worktree 的未提交改动摘要（只用来在日志顶部显示一行）。
+ * 失败不影响日志本身，返回 null 就不显示那一行。
+ */
+async function loadPending() {
+  if (!state.repo) return null
+  // logWt 为 null 表示主工作树
+  const wt = state.logWt || state.repo.toplevel
+  if (!wt) return null
+  try {
+    const d = await api(`/api/repos/${state.repo.id}/commit/WORKTREE?wt=${encodeURIComponent(wt)}`)
+    const files = d.files || []
+    if (!files.length) return null
+    return {
+      wt,
+      count: files.length,
+      add: files.reduce((n, f) => n + (f.add || 0), 0),
+      del: files.reduce((n, f) => n + (f.del || 0), 0),
+      untracked: d.untracked || 0,
+      noHead: Boolean(d.noHead),
+    }
+  } catch {
+    return null
+  }
+}
+
 async function loadLog(reset = false) {
   if (!state.repo) return
   if (reset) { state.logSkip = 0; state.commitsAll = [] }
@@ -532,7 +559,12 @@ async function loadLog(reset = false) {
       count: String(state.logCount),
     })
     if (state.logWt) params.set('wt', state.logWt)
-    const data = await api(`/api/repos/${state.repo.id}/log?${params}`)
+    // 未提交改动和日志并行取：它只是顶部的一行提示，不该拖慢日志
+    const [data, pending] = await Promise.all([
+      api(`/api/repos/${state.repo.id}/log?${params}`),
+      loadPending(),
+    ])
+    state.pending = pending
     if (reset) state.commitsAll = data.commits
     else state.commitsAll = state.commitsAll.concat(data.commits)
     state.logSkip = state.commitsAll.length
@@ -557,6 +589,27 @@ function renderLog() {
     : state.commitsAll
 
   const frag = document.createDocumentFragment()
+
+  // 未提交的更改：只在实际有改动、且没在过滤时显示。
+  // 过滤是在提交里搜关键字，插一行不属于任何提交的记录会让人以为它命中了。
+  if (state.pending && !filter) {
+    const p = state.pending
+    const tr = document.createElement('tr')
+    tr.className = 'log-pending' + (state.selectedSha === 'WORKTREE' ? ' selected' : '')
+    tr.dataset.sha = 'WORKTREE'
+    const stat = p.add || p.del
+      ? `<span class="plus">+${p.add}</span> <span class="minus">−${p.del}</span>`
+      : ''
+    const newPart = p.untracked ? ` · 其中 ${p.untracked} 个新文件` : ''
+    tr.innerHTML = `<td colspan="4">
+      <span class="pending-dot" aria-hidden="true"></span>
+      <span class="pending-label">未提交的更改</span>
+      <span class="pending-stat">${p.count} 个文件${newPart}</span>
+      <span class="pending-diff">${stat}</span>
+    </td>`
+    frag.appendChild(tr)
+  }
+
   for (const c of commits) {
     const tr = document.createElement('tr')
     tr.dataset.sha = c.sha
@@ -602,6 +655,7 @@ $('btn-more').addEventListener('click', () => loadLog(false))
 
 // ---------- commit detail ----------
 async function selectCommit(sha) {
+  const isPending = sha === 'WORKTREE'
   state.selectedSha = sha
   state.selectedFile = null
   syncFileTreeBtn()
@@ -612,12 +666,19 @@ async function selectCommit(sha) {
   for (const tr of $('log-body').children) {
     tr.classList.toggle('selected', tr.dataset.sha === sha)
   }
-  const c = state.commitsAll.find((x) => x.sha === sha)
-  $('detail-title').textContent = sha.slice(0, 7)
-  $('detail-meta').textContent = c ? `${c.author} · ${fmtTime(c.time)}` : ''
+  const c = isPending ? null : state.commitsAll.find((x) => x.sha === sha)
+  if (isPending) {
+    $('detail-title').textContent = '未提交'
+    $('detail-meta').textContent = (state.pending?.wt || '').replace(/^\/home\/[^/]+\//, '~/')
+  } else {
+    $('detail-title').textContent = sha.slice(0, 7)
+    $('detail-meta').textContent = c ? `${c.author} · ${fmtTime(c.time)}` : ''
+  }
   $('detail-body').innerHTML = '<div class="empty">加载中…</div>'
   try {
-    const data = await api(`/api/repos/${state.repo.id}/commit/${sha}`)
+    // 工作区的改动必须指定 worktree：主工作树和各 worktree 各有一份
+    const q = isPending && state.pending?.wt ? `?wt=${encodeURIComponent(state.pending.wt)}` : ''
+    const data = await api(`/api/repos/${state.repo.id}/commit/${sha}${q}`)
     state.detailFiles = data.files
     renderFileList(c, data.files)
   } catch (err) {
@@ -645,7 +706,7 @@ function renderFileList(commit, files) {
 
   const sec = document.createElement('div')
   sec.className = 'detail-sec-title'
-  sec.textContent = `改动文件 (${files.length})`
+  sec.textContent = (state.selectedSha === 'WORKTREE' ? '未提交的文件' : '改动文件') + ` (${files.length})`
   frag.appendChild(sec)
 
   if (!files.length) {
@@ -696,7 +757,9 @@ async function openFile(rowEl) {
   }
   holder.innerHTML = '<div class="empty">加载 diff…</div>'
   try {
-    const data = await api(`/api/repos/${state.repo.id}/diff?sha=${state.selectedSha}&path=${encodeURIComponent(path)}`)
+    // 未提交的 diff 要在具体 worktree 里跑
+    const wtq = state.selectedSha === 'WORKTREE' && state.pending?.wt ? `&wt=${encodeURIComponent(state.pending.wt)}` : ''
+    const data = await api(`/api/repos/${state.repo.id}/diff?sha=${state.selectedSha}&path=${encodeURIComponent(path)}${wtq}`)
     holder.replaceChildren(renderPatch(data.patch, data.truncated))
     // 滚动到 patch 顶部
     const scroll = $('detail-body')

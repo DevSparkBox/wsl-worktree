@@ -14,7 +14,11 @@ const $ = (id) => document.getElementById(id)
 const qs = new URLSearchParams(location.search)
 const repoId = qs.get('repo') || ''
 const wtPath = qs.get('wt') || ''
+// 工作区视图用特殊 sha；原始提交要另存，否则切回「提交」时无从知道该回哪个 commit。
+// 通过 URL 的 base 参数跨页面保留（切换是整页重载）。
+const baseSha = qs.get('base') || (qs.get('sha') && qs.get('sha') !== 'WORKTREE' ? qs.get('sha') : 'HEAD')
 let sha = qs.get('sha') || 'HEAD'
+const isWorktreeScope = () => sha === 'WORKTREE'
 
 const state = {
   repo: null,
@@ -55,6 +59,7 @@ const state = {
       return v === null ? true : v === '1'
     } catch { return true }
   })(),
+  untracked: null,     // 工作区视图里未被跟踪的路径集合
   lineEls: null,       // 当前文件所有行的 tr，用于滚动联动
   lineTops: null,      // 上述行的 offsetTop，二分查找当前行
 }
@@ -225,7 +230,9 @@ function expandChain(d) {
 
 function fileRow(path, name, title, depth = 0, size = null, showDir = false) {
   const el = document.createElement('div')
-  el.className = 't-node t-file' + (path === state.selected ? ' active' : '')
+  // 工作区视图里未被跟踪的文件标个「新」，和已跟踪文件区分开
+  const isNew = Boolean(state.untracked?.has(path))
+  el.className = 't-node t-file' + (path === state.selected ? ' active' : '') + (isNew ? ' is-new' : '')
   el.dataset.path = path
   el.setAttribute('role', 'treeitem')
   el.style.paddingLeft = `${6 + depth * 13}px`
@@ -236,6 +243,7 @@ function fileRow(path, name, title, depth = 0, size = null, showDir = false) {
     `<span class="t-caret t-caret-hidden"></span>` +
     ICON_FILE +
     `<span class="t-name">${esc(name)}</span>` +
+    (isNew ? '<span class="t-new" title="未跟踪的新文件">新</span>' : '') +
     (dirLabel ? `<span class="t-dir-hint" title="${esc(dirLabel)}">${esc(dirLabel)}</span>` : '') +
     // 大小放在图标左侧：hover 出图标时，大小先让位消失，避免两列挤在一起
     (size != null ? `<span class="t-size">${fmtSize(size)}</span>` : '') +
@@ -350,6 +358,28 @@ $('t-file-body').addEventListener('scroll', () => {
 
 $('t-btn-outline').addEventListener('click', () => setOutlineVisible($('t-outline').hidden))
 $('t-outline-close').addEventListener('click', () => setOutlineVisible(false))
+
+/** 顶部的「提交 / 工作区」切换：改 URL 重载页面，路径可能不在新树里所以丢掉 */
+function initScopeSwitch() {
+  const box = $('t-scope')
+  if (!box) return
+  for (const btn of box.querySelectorAll('.t-scope-btn')) {
+    btn.classList.toggle('active', btn.dataset.scope === (isWorktreeScope() ? 'worktree' : 'commit'))
+  }
+  box.addEventListener('click', (e) => {
+    const btn = e.target.closest('.t-scope-btn')
+    if (!btn || btn.classList.contains('active')) return
+    const next = btn.dataset.scope === 'worktree' ? 'WORKTREE' : baseSha
+    const u = new URL(location.href)
+    u.searchParams.set('sha', next)
+    // 工作区视图要记住是从哪个提交切过来的，否则切回去只能猜
+    if (btn.dataset.scope === 'worktree') u.searchParams.set('base', baseSha)
+    else u.searchParams.delete('base')
+    // 当前文件在新范围里未必存在（未跟踪文件在旧快照里没有），交给页面自己选第一个
+    u.searchParams.delete('path')
+    location.href = u.toString()
+  })
+}
 
 async function selectFile(path, opts = {}) {
   state.selected = path
@@ -912,8 +942,9 @@ async function init() {
   $('t-hl').checked = state.highlight
   // 大纲默认展开（记住上次的选择）
   setOutlineVisible(state.outlineVisible)
+  initScopeSwitch()
   $('t-wt').title = wtPath || ''
-  $('t-commit').textContent = sha === 'HEAD' ? 'HEAD' : sha.slice(0, 7)
+  $('t-commit').textContent = isWorktreeScope() ? '工作区' : sha === 'HEAD' ? 'HEAD' : sha.slice(0, 7)
 
   // 仓库名 + commit 信息
   try {
@@ -939,14 +970,17 @@ async function init() {
 
   // tag 查询和树加载并行：两者互不依赖，树要 160ms、refs 只要 10ms，
   // 串行会让 tag 白等。tag 失败不影响树，所以不 await 它。
-  loadRefs(sha)
+  // 工作区模式没有对应的提交，跳过 refs（拿 'WORKTREE' 去查会报错）
+  if (!isWorktreeScope()) loadRefs(sha)
 
   try {
     const data = await api(`/api/repos/${repoId}/tree?${params}`)
     state.files = data.files || []
-    sha = data.sha || sha
+    state.untracked = new Set(state.files.filter((f) => f.status === 'A').map((f) => f.path))
+    // 工作区模式下后端返回的 sha 就是 'WORKTREE'，保持住别被覆盖
+    if (!isWorktreeScope()) sha = data.sha || sha
     state.root = buildTree(state.files, state.compact)
-    $('t-commit').textContent = sha.slice(0, 7)
+    $('t-commit').textContent = isWorktreeScope() ? '工作区' : sha.slice(0, 7)
     $('t-stat').textContent = `${state.files.length} 个文件`
     document.title = `File Tree · ${state.repo?.name || ''}`
     renderTree()

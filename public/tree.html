@@ -19,6 +19,11 @@
   </div>
   <span class="t-repo" id="t-repo"></span>
   <span class="t-commit mono" id="t-commit" title="当前查看的提交"></span>
+  <!-- 查看范围：该提交的快照 / 工作区当前内容（含未提交改动） -->
+  <div class="t-scope" id="t-scope" role="group" aria-label="查看范围">
+    <button class="t-scope-btn" data-scope="commit" title="查看该提交的快照">提交</button>
+    <button class="t-scope-btn" data-scope="worktree" title="查看工作区当前内容（含未提交的改动）">工作区</button>
+  </div>
   <!-- 该提交上指向它的 tag（发布版本）。没有就不显示 -->
   <span class="t-tags" id="t-tags"></span>
   <span class="t-subject" id="t-subject"></span>
