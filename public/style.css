@@ -1181,3 +1181,40 @@ body.resizing * { cursor: col-resize !important; }
   box-shadow: 0 0 0 3px var(--red-soft);
   background: #a51f1f;
 }
+
+/* ---------- 克隆仓库对话框 ---------- */
+.cl-progress { margin-top: 14px; }
+.cl-phase {
+  font: 11.5px var(--sans);
+  color: var(--text-dim);
+  margin-bottom: 5px;
+}
+.cl-bar {
+  height: 6px;
+  background: var(--bg-alt);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.cl-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width .25s ease;
+}
+.cl-meta {
+  font: 10.5px var(--mono);
+  color: var(--text-faint);
+  margin-top: 5px;
+  min-height: 14px;
+}
+.cl-err {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: var(--red-soft);
+  color: var(--red);
+  border-radius: 5px;
+  font: 11.5px var(--sans);
+  line-height: 1.6;
+  word-break: break-word;
+}

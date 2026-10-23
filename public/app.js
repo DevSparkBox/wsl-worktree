@@ -687,6 +687,7 @@ document.addEventListener('keydown', (e) => {
 async function init() {
   try {
     const cfg = await api('/api/config')
+    state.roots = cfg.roots || []
     $('roots').textContent = cfg.roots.join(', ')
   } catch {}
   await loadRepos()
@@ -2400,3 +2401,175 @@ function highlight(text, query) {
   const after = esc(text.slice(idx + q.length))
   return `${before}<mark>${hit}</mark>${after}`
 }
+
+// ============================================================
+// 克隆仓库
+// ============================================================
+/**
+ * 从 URL 推目录名：
+ *   git@host:team/repo.git        → repo
+ *   https://host/team/repo.git/   → repo
+ *   ssh://git@host:22/t/a.git     → a
+ * 取最后一个 / 或 : 之后的段，去掉 .git。
+ */
+function repoNameFromUrl(url) {
+  let s = String(url || '').trim().replace(/[/\s]+$/, '')
+  s = s.replace(/\.git$/i, '')
+  const seg = s.split(/[/:]/).filter(Boolean).pop() || ''
+  // 允许字母数字和 . _ -，其他一律去掉（防止把奇怪字符带进路径）
+  return seg.replace(/[^\w.-]/g, '')
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/** 轮询克隆任务，直到成功/失败 */
+async function pollClone(id, onProgress, timeoutMs = 12 * 60 * 1000) {
+  const t0 = Date.now()
+  for (;;) {
+    if (Date.now() - t0 > timeoutMs) throw new Error('等待克隆结果超时')
+    await sleep(500)
+    const r = await fetch(`/api/clone/${id}`)
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}))
+      throw new Error(d.error || `HTTP ${r.status}`)
+    }
+    const job = await r.json()
+    onProgress(job)
+    if (job.status === 'done') return job
+    if (job.status !== 'running') throw new Error(job.error || '克隆失败')
+  }
+}
+
+async function openCloneDialog() {
+  const roots = state.roots?.length ? state.roots : (await api('/api/config').catch(() => ({}))).roots || []
+  if (!roots.length) { toast('没有配置扫描根目录，先检查 config.json', true); return }
+
+  const body = document.createElement('div')
+  body.innerHTML = `
+    <div class="field">
+      <label>仓库地址</label>
+      <input class="input" id="cl-url" placeholder="git@gitlab.example.com:team/repo.git" autocomplete="off" spellcheck="false">
+      <div class="hintline">HTTPS 和 SSH 都行，用系统里已配置的凭证。</div>
+    </div>
+    <div class="field">
+      <label>克隆到</label>
+      ${roots.length > 1
+        ? `<select class="input" id="cl-root">${roots.map((r) => `<option value="${esc(r)}">${esc(r)}</option>`).join('')}</select>`
+        : `<input class="input" id="cl-root" value="${esc(roots[0])}" readonly>`}
+      <input class="input" id="cl-dir" placeholder="目录名" autocomplete="off" spellcheck="false" style="margin-top:6px">
+      <div class="hintline" id="cl-path"></div>
+    </div>
+    <div class="field">
+      <label class="checkline"><input type="checkbox" id="cl-depth"> <span>浅克隆（<code>--depth 1</code>，只要最新一次提交）</span></label>
+      <label class="checkline"><input type="checkbox" id="cl-sub"> <span>同时初始化子模块（<code>--recurse-submodules</code>）</span></label>
+    </div>
+    <div class="cl-progress" id="cl-progress" hidden>
+      <div class="cl-phase" id="cl-phase">准备中</div>
+      <div class="cl-bar"><div class="cl-fill" id="cl-fill"></div></div>
+      <div class="cl-meta" id="cl-meta"></div>
+    </div>
+    <div class="cl-err" id="cl-err" hidden></div>`
+
+  const urlEl = body.querySelector('#cl-url')
+  const rootEl = body.querySelector('#cl-root')
+  const dirEl = body.querySelector('#cl-dir')
+  const pathEl = body.querySelector('#cl-path')
+  const depthEl = body.querySelector('#cl-depth')
+  const subEl = body.querySelector('#cl-sub')
+  const progEl = body.querySelector('#cl-progress')
+  const fillEl = body.querySelector('#cl-fill')
+  const phaseEl = body.querySelector('#cl-phase')
+  const metaEl = body.querySelector('#cl-meta')
+  const errEl = body.querySelector('#cl-err')
+
+  // 用户手动改过目录名之后，就不再被 URL 推导覆盖
+  let dirTouched = false
+
+  const refreshPath = () => {
+    const name = dirEl.value.trim()
+    const root = String(rootEl.value || '').replace(/\/+$/, '')
+    pathEl.textContent = name ? `→ ${root}/${name}` : ''
+    errEl.hidden = true
+  }
+
+  urlEl.addEventListener('input', () => {
+    if (!dirTouched) dirEl.value = repoNameFromUrl(urlEl.value)
+    refreshPath()
+  })
+  dirEl.addEventListener('input', () => { dirTouched = true; refreshPath() })
+  rootEl.addEventListener('change', refreshPath)
+
+  const res = await openModal({
+    title: '克隆仓库',
+    wide: true,
+    body,
+    buttons: [
+      { label: '取消', onClick: (ctx) => ctx.close(null) },
+      {
+        label: '克隆',
+        kind: 'primary',
+        id: 'cl-go',
+        onClick: async () => {
+          const url = urlEl.value.trim()
+          const name = dirEl.value.trim()
+          const root = String(rootEl.value || '').replace(/\/+$/, '')
+
+          if (!url) { errEl.hidden = false; errEl.textContent = '请填仓库地址'; return false }
+          if (!name) { errEl.hidden = false; errEl.textContent = '请填目录名'; return false }
+          if (/[/\\]/.test(name) || name === '.' || name === '..') {
+            errEl.hidden = false
+            errEl.textContent = '目录名不能包含 / 或 \\'
+            return false
+          }
+
+          const btn = $('cl-go')
+          setBusy(btn, true, '克隆中…')
+          progEl.hidden = false
+          errEl.hidden = true
+          fillEl.style.width = '0%'
+          phaseEl.textContent = '准备中'
+          metaEl.textContent = ''
+
+          try {
+            const r = await fetch('/api/clone', {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ url, dir: `${root}/${name}`, depth1: depthEl.checked, submodules: subEl.checked }),
+            })
+            const data = await r.json().catch(() => ({}))
+            if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`)
+
+            const job = await pollClone(data.id, (j) => {
+              fillEl.style.width = `${j.percent || 0}%`
+              phaseEl.textContent = j.phase || '克隆中'
+              metaEl.textContent = [
+                `${j.percent || 0}%`,
+                j.rate || '',
+                j.status === 'running' ? '' : `${Math.round(j.elapsedMs / 1000)}s`,
+              ].filter(Boolean).join(' · ')
+            })
+            setBusy(btn, false)
+            return { cloned: true, dir: job.dir }
+          } catch (e) {
+            setBusy(btn, false)
+            errEl.hidden = false
+            errEl.textContent = e.message
+            return false // 不关对话框，用户可以直接改地址重试
+          }
+        },
+      },
+    ],
+  })
+
+  if (!res?.cloned) return
+  toast('克隆完成')
+  // 后端在 job 完成时已经让扫描缓存失效，这里直接强制刷一次
+  await loadRepos(true)
+  const target = state.repos.find((r) => r.toplevel === res.dir)
+  if (target) await selectRepo(target.id)
+}
+
+$('btn-clone').addEventListener('click', () => {
+  openCloneDialog().catch((e) => toast(e.message, true))
+})
+

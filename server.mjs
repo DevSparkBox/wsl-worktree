@@ -14,6 +14,7 @@ import { grepTree } from './lib/grep.mjs'
 import { refsAtCommit, listRefTipCommits } from './lib/refs.mjs'
 import { compareCommits, compareFile } from './lib/compare.mjs'
 import { LOG_FMT, parseLog } from './lib/logfmt.mjs'
+import { startClone, getClone, hasRunningClone } from './lib/clone.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
@@ -224,6 +225,52 @@ const server = createServer(async (req, res) => {
         )
       )
       return json(res, 200, { repos: withMeta })
+    }
+
+    // ---------- 克隆仓库 ----------
+    // clone 是长任务，POST 只负责启动并返回 jobId，进度靠 GET 轮询
+    if (p === '/api/clone' && req.method === 'POST') {
+      const body = await readBody(req)
+      const url2 = String(body.url || '').trim()
+      const dir = String(body.dir || '').trim()
+
+      if (!url2) return json(res, 400, { error: '缺少仓库地址' })
+      if (!dir.startsWith('/')) return json(res, 400, { error: '目标目录必须是绝对路径' })
+      if (dir === '/' || dir.endsWith('/')) return json(res, 400, { error: '目标目录不能以 / 结尾' })
+
+      // 必须落在某个扫描根下：否则能往任意位置写，也能克隆到别的仓库里面
+      const roots = (cfg.roots || []).map((r) => r.replace(/\/+$/, ''))
+      const inRoot = roots.some((r) => dir.startsWith(`${r}/`))
+      if (!inRoot) {
+        return json(res, 400, { error: `目标目录必须在扫描根下（${roots.join(' / ')}）` })
+      }
+      if (hasRunningClone()) {
+        return json(res, 409, { error: '已经有一个克隆在进行，等它跑完再试' })
+      }
+
+      const id = startClone({
+        url: url2,
+        dir,
+        depth1: Boolean(body.depth1),
+        submodules: Boolean(body.submodules),
+      })
+      // startClone 内部会做「目标已存在」这类同步预检，失败的直接报给前端，
+      // 不用让它先拿 jobId 再轮询一次才知道
+      const job = getClone(id)
+      if (job.status === 'error') return json(res, 409, { error: job.error, id })
+      return json(res, 202, { id })
+    }
+
+    const mClone = p.match(/^\/api\/clone\/([\w-]+)$/)
+    if (mClone && req.method === 'GET') {
+      const job = getClone(mClone[1])
+      if (!job) return json(res, 404, { error: '没有这个克隆任务' })
+      // 克隆完成后让仓库扫描缓存失效，下次 /api/repos 能立刻看到新仓库
+      if (job.status === 'done' && scanCache.data) {
+        scanCache = { at: 0, data: null }
+        stateCache.clear()
+      }
+      return json(res, 200, job)
     }
 
     const mWt = p.match(/^\/api\/repos\/([^/]+)\/worktrees$/)
