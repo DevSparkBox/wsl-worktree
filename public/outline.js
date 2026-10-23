@@ -198,8 +198,10 @@ export function createOutline(opts) {
     const caret = showCaret
       ? `<span class="o-caret" data-act="toggle" title="${isCollapsed ? '展开' : '折叠'}">${isCollapsed ? CARET_CLOSED : CARET_OPEN}</span>`
       : '<span class="o-caret o-caret-empty"></span>'
-    const icon = isType ? 'T' : sym.kind === 'prop' ? 'P' : 'ƒ'
-    const iconCls = isType ? 'o-icon-type' : sym.kind === 'prop' ? 'o-icon-prop' : 'o-icon-fn'
+    // Markdown 标题用 H 图标，和类型（T）/ 函数（ƒ）/ 属性（P）区分开
+    const isHeading = sym.kind === 'heading'
+    const icon = isHeading ? 'H' : isType ? 'T' : sym.kind === 'prop' ? 'P' : 'ƒ'
+    const iconCls = isHeading || isType ? 'o-icon-type' : sym.kind === 'prop' ? 'o-icon-prop' : 'o-icon-fn'
 
     // 引用数：只在 >1 时显示，避免每个符号后面都挂个「1」
     const n = state.refCounts.get(sym.name) || 0

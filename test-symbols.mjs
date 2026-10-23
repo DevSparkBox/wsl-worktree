@@ -257,6 +257,47 @@ check('Vue 只提取 script 块', names(v).includes('handleClick') && !names(v).
 check('Vue 行号按整文件算', v.find((s) => s.name === 'handleClick')?.line === 10,
   String(v.find((s) => s.name === 'handleClick')?.line))
 
+console.log('\n===== Markdown =====')
+const MD = `---
+title: 设计文档
+tags: [a, b]
+---
+
+# 项目概述
+
+正文里的 # 不是标题。
+
+## 技术栈
+
+\`\`\`bash
+# 这行在代码块里，不是标题
+echo hi
+\`\`\`
+
+### 后端
+
+#### 四级标题不收
+
+## 目录结构
+
+# 附录
+`
+const md = extractSymbols(MD, 'md')
+check('提取 Markdown 标题', ['项目概述', '技术栈', '后端', '目录结构', '附录'].every((n) => names(md).includes(n)),
+  names(md).slice(0, 4).join(' / '))
+check('只到 3 级（4 级不收）', !names(md).includes('四级标题不收'), '')
+check('代码块里的 # 不算标题', !names(md).some((n) => n.includes('echo') || n.includes('代码块里')), '')
+check('跳过 frontmatter', !names(md).includes('设计文档') && !names(md).includes('tags: [a, b]'), '')
+check('标题行号正确', md.find((s) => s.name === '项目概述')?.line === 6,
+  String(md.find((s) => s.name === '项目概述')?.line))
+
+const mdTree = buildSymbolTree(md)
+check('Markdown 按标题级别嵌套',
+  JSON.stringify(flatten(mdTree)) === JSON.stringify([
+    '项目概述', '  技术栈', '    后端', '  目录结构', '附录',
+  ]),
+  JSON.stringify(flatten(mdTree)))
+
 console.log('\n===== 建树（缩进层级）=====')
 const TREE_JAVA = `public class Outer {
     void a() {
@@ -323,7 +364,7 @@ check('词边界：不匹配 fooBar', !refs.some((r) => r.text.includes('fooBar(
 console.log('\n===== 其他 =====')
 check('不支持的语言返回空', extractSymbols('select 1', 'sql').length === 0, '')
 check('supportsOutline 覆盖各语言',
-  ['java', 'cs', 'ts', 'js', 'vue', 'go', 'py'].every(supportsOutline) && !supportsOutline('sql'), '')
+  ['java', 'cs', 'ts', 'js', 'vue', 'go', 'py', 'md'].every(supportsOutline) && !supportsOutline('sql'), '')
 check('空内容不报错', extractSymbols('', 'java').length === 0, '')
 check('正则特殊字符可转义', escapeRe('a.b(1)') === 'a\\.b\\(1\\)', escapeRe('a.b(1)'))
 check('怪内容不抛异常', extractSymbols('@@@\n{{{\n)))', 'java').length >= 0, '')

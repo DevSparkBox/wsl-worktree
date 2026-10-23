@@ -329,6 +329,58 @@ export function extractVue(content) {
   return extractJsTs(inner).map((s) => ({ ...s, line: s.line + start + 1 }))
 }
 
+// ---------------------------------------------------------------- Markdown
+
+/**
+ * Markdown 只提标题（ATX `#`），并且**最多到 3 级**。
+ *
+ * 层级直接用标题级别表达：把 level 换算成缩进（(level-1)*2），
+ * 这样能复用统一的缩进建树，不用给 md 单写一套。
+ *
+ * 两个必须跳过的地方：
+ *   - 代码围栏（``` / ~~~）里的 `# 注释` 不是标题
+ *   - 文件开头的 YAML frontmatter（`---` 包起来那段）
+ */
+export function extractMarkdown(content) {
+  const out = []
+  const lines = content.split('\n')
+  let inFence = false
+  let inFront = false
+  let seenBody = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim()
+
+    // frontmatter 只在文件最开头
+    if (!seenBody && i === 0 && /^---\s*$/.test(t)) { inFront = true; continue }
+    if (inFront) {
+      if (/^(---|\.\.\.)\s*$/.test(t)) inFront = false
+      continue
+    }
+    if (t) seenBody = true
+
+    // 代码围栏：进出都靠它，围栏内的 # 一律不算
+    if (/^(`{3,}|~{3,})/.test(t)) { inFence = !inFence; continue }
+    if (inFence) continue
+
+    const m = t.match(/^(#{1,6})\s+(.+?)\s*#*\s*$/)
+    if (!m) continue
+    const level = m[1].length
+    if (level > 3) continue // 只要到 3 级
+
+    const name = m[2].trim()
+    if (!name) continue
+    out.push({
+      kind: 'heading',
+      name,
+      line: i + 1,
+      indent: (level - 1) * 2,
+      detail: `h${level}`,
+    })
+  }
+  return out
+}
+
 // ---------------------------------------------------------------- 分派
 
 const EXTRACTORS = {
@@ -343,6 +395,8 @@ const EXTRACTORS = {
   go: extractGo,
   py: extractPython,
   vue: extractVue,
+  md: extractMarkdown,
+  markdown: extractMarkdown,
 }
 
 /** 当前语言是否支持大纲 */

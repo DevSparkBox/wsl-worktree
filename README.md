@@ -57,6 +57,10 @@ C# 属性例外，显示为 `prop`（在 C# 里属性就是成员的常规写法
 | Vue | script 块内同上 | 同上（不含 template 里的组件引用） |
 | Python | class | def（含 async） |
 | Go | type（struct/interface） | func（带 receiver 的挂到对应 type 下） |
+| Markdown | 标题（`#` ~ `###`，最多 3 级） | — |
+
+Markdown 的层级直接用标题级别：`level` 换算成缩进 `(level-1)*2`，复用同一套缩进建树。
+跳过代码围栏里的 `#` 和文件头的 YAML frontmatter——这两处最容易误判成标题。
 
 ### 层级怎么来的
 
@@ -1488,7 +1492,7 @@ node test-ui-tags.mjs
 # UI：更新分支对话框按钮退场（20 项）
 node test-ui-pull-dialog.mjs
 
-# 符号提取与建树（纯逻辑，48 项）
+# 符号提取与建树（纯逻辑，60 项）
 node test-symbols.mjs
 
 # UI：文件树页的符号大纲（25 项）
