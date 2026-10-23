@@ -194,6 +194,21 @@ const RE_CS_PROP = new RegExp(
 )
 const RE_CS_CTOR = new RegExp(`^\\s*(?:${CS_MOD}\\s+)*([A-Z]\\w*)\\s*\\([^)]*\\)\\s*(?::\\s*(?:base|this)\\s*\\([^)]*\\))?\\s*(?:\\{|=>)?\\s*$`)
 
+/**
+ * 方法匹配的**第一组**（返回类型位置）不能是这些词。
+ *
+ * 起因是两个真实误报：
+ *   `throw new BusinessLogicException("...")` → 返回类型位置是 "throw new"
+ *   `from a in (from i in ...)`              → 返回类型位置是 "from a"
+ * 两组都满足「X Y(...)」的形状，只看方法名根本筛不掉——
+ * 名字分别是 BusinessLogicException 和 in，都像标识符。
+ * 所以必须检查返回类型那一段的开头词。
+ *
+ * select/where/group/orderby 是 C# LINQ 的查询子句，常写成
+ * `select new Dto() { ... }`，同样是「词 + 名字 + 括号」的形状。
+ */
+const CS_STMT_HEAD = /^(if|for|foreach|while|switch|catch|else|do|try|case|default|break|continue|goto|return|throw|new|from|where|select|group|orderby|let|join|in|on|equals|into|var|await|yield|using|lock|checked|unchecked|fixed|stackalloc|nameof|typeof|sizeof|default)\b/
+
 export function extractCsharp(content) {
   const out = []
   const lines = content.split('\n')
@@ -222,7 +237,10 @@ export function extractCsharp(content) {
       continue
     }
     const m = t.match(RE_CS_METHOD)
-    if (m && !/^(if|for|foreach|while|switch|catch|return|new|throw|else|using|lock|yield)$/.test(m[2])) {
+    // 关键：检查**返回类型位置**（m[1]），不是方法名。
+    // throw new Foo() / from a in (…) / select new Dto() 的名字都像标识符，
+    // 只有返回类型那一段暴露了它是语句。
+    if (m && !CS_STMT_HEAD.test(m[1].trim())) {
       out.push({ kind: 'method', name: m[2], line: i + 1, indent: indentOf(line), detail: m[1].trim() })
       continue
     }

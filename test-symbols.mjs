@@ -130,6 +130,45 @@ check('属性显示为 prop',
 check('字段不提取', !names(c).includes('_name'), '')
 check('C# 注释里的假符号不提取', !names(c).includes('Fake'), '')
 
+// 语句被误判成方法：这几个形状都满足「词 + 标识符 + 括号」，
+// 只看方法名根本筛不掉，必须检查返回类型位置。
+const CS_NOISE = `public class Sample
+{
+    public void Run(string id)
+    {
+        throw new BusinessLogicException("实体标识不正确。");
+        throw new MetadataNotFoundException(controlId, type);
+        return CreateOrganization(myBusinessUnit);
+        new OpenData();
+    }
+
+    public List<Foo> Query()
+    {
+        var query = from a in (from i in connectionScope.AsQueryable<User>()
+                               where i.UserType == 1
+                               select i).ToList();
+        var other = from m in list
+                    where m.Id > 0
+                    orderby m.Name
+                    select new CompanySimpleInfoDto() { Id = m.Id };
+        return query;
+    }
+
+    public bool Check(int x) => x > 0;
+}
+`
+const cn = extractSymbols(CS_NOISE, 'cs')
+check('throw new … 不被当成方法',
+  !names(cn).includes('BusinessLogicException') && !names(cn).includes('MetadataNotFoundException'),
+  names(cn).filter((n) => n.endsWith('Exception')).join(',') || '已排除')
+check('return Foo(…) 不被当成方法', !names(cn).includes('CreateOrganization'), '')
+check('new Foo() 不被当成方法', !names(cn).includes('OpenData'), '')
+check('LINQ from … in (…) 不被当成方法', !names(cn).includes('in'), '')
+check('LINQ select new Dto() 不被当成方法', !names(cn).includes('CompanySimpleInfoDto'), '')
+check('正常方法仍被提取', ['Run', 'Query', 'Check'].every((n) => names(cn).includes(n)),
+  ['Run', 'Query', 'Check'].filter((n) => !names(cn).includes(n)).join(',') || '全部命中')
+
+
 console.log('\n===== TypeScript / JavaScript =====')
 const TS = `import { x } from './x'
 
