@@ -91,8 +91,32 @@ check('对比按钮打开 compare 页',
   /\/compare\.html\?repo=/.test(cmpOpen.value || '') && /[?&]a=/.test(cmpOpen.value || '') && /[?&]b=/.test(cmpOpen.value || ''),
   cmpOpen.value?.replace(/^.*compare/, 'compare').slice(0, 60))
 
-const rowActs = await evaluate(`[...document.querySelectorAll('#wt-body tr:first-child .icon-btn')].map(b => b.textContent.trim() + (b.disabled ? '(禁)' : ''))`)
-check('行操作含 切换/拉取/删除', ['切换', '拉取', '删除'].every((k) => rowActs.value?.some((x) => x.startsWith(k))), JSON.stringify(rowActs.value))
+const rowActs = await evaluate(`[...document.querySelectorAll('#wt-body tr:first-child .icon-btn')].map(b => b.dataset.act)`)
+check('行内只留「更多」和「删除」', JSON.stringify(rowActs.value) === JSON.stringify(['menu', 'remove']), JSON.stringify(rowActs.value))
+
+// ---------- 行内「更多」菜单 ----------
+await evaluate(`document.querySelector('#wt-body tr:first-child .icon-btn[data-act=menu]').click()`)
+await sleep(400)
+const menuItems = await evaluate(`[...document.querySelectorAll('.row-menu-item')].map(b => b.querySelector('.rmi-label').textContent)`)
+const menuIcons = await evaluate(`document.querySelectorAll('.row-menu-item .rmi-icon svg').length`)
+const menuParent = await evaluate(`document.querySelector('.row-menu')?.parentElement?.tagName`)
+const menuPos = await evaluate(`(() => {
+  const m = document.querySelector('.row-menu')
+  const a = document.querySelector('#wt-body tr:first-child [data-act=menu]')
+  if (!m || !a) return null
+  const mr = m.getBoundingClientRect(), ar = a.getBoundingClientRect()
+  return { below: mr.top >= ar.bottom - 2, inside: mr.right <= window.innerWidth }
+})()`)
+check('菜单含切换/拉取/打开类操作',
+  ['切换分支', '拉取上游', '用 VS Code 打开', '打开资源管理器', '在终端中打开'].every((k) => menuItems.value?.includes(k)),
+  JSON.stringify(menuItems.value))
+check('菜单项都有图标', menuIcons.value === menuItems.value?.length, `${menuIcons.value}/${menuItems.value?.length}`)
+check('菜单挂在 body 上（不被表格裁切）', menuParent.value === 'BODY', menuParent.value)
+check('菜单定位在按钮下方且在视口内', menuPos.value?.below === true && menuPos.value?.inside === true,
+  JSON.stringify(menuPos.value))
+await evaluate(`document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))`)
+await sleep(300)
+check('点外部关闭菜单', (await evaluate(`Boolean(document.querySelector('.row-menu'))`)).value === false, '')
 
 const mainRemoveDisabled = await evaluate(`document.querySelector('#wt-body tr:first-child .icon-btn[data-act=remove]')?.disabled`)
 check('主工作树删除按钮禁用', mainRemoveDisabled.value === true, String(mainRemoveDisabled.value))
@@ -105,7 +129,11 @@ await evaluate(`(() => {
   const rows = [...document.querySelectorAll('#wt-body tr')]
   const pick = rows.find((tr) => !/detached/i.test(tr.textContent))
     || rows[1] || rows[0]
-  pick?.querySelector('.icon-btn[data-act=checkout]')?.click()
+  const btn = pick?.querySelector('.icon-btn[data-act=menu]')
+  btn?.click()
+  // 菜单挂在 body 上，按文字找「切换分支」
+  const item = [...document.querySelectorAll('.row-menu-item')].find((b) => b.textContent.includes('切换分支'))
+  item?.click()
 })()`)
 await sleep(2000)
 const coTitle = await evaluate(`document.getElementById('modal-title').textContent`)
@@ -139,10 +167,16 @@ await evaluate(`document.getElementById('modal-close').click()`)
 await sleep(400)
 
 // ---------- 拉取对话框 ----------
+// 拉取进了「更多」菜单，先开菜单再点
 await evaluate(`(() => {
-  const b = document.querySelectorAll('#wt-body tr')[1].querySelector('.icon-btn[data-act=pull]')
-  if (b && !b.disabled) { b.click(); return 'clicked' }
-  return 'disabled'
+  const row = document.querySelectorAll('#wt-body tr')[1]
+  const menu = row.querySelector('.icon-btn[data-act=menu]')
+  if (!menu) return 'no-menu'
+  menu.click()
+  const item = [...document.querySelectorAll('.row-menu-item')].find((b) => b.textContent.includes('拉取上游'))
+  if (!item || item.disabled) return 'disabled'
+  item.click()
+  return 'clicked'
 })()`)
 await sleep(1500)
 const pullTitle = await evaluate(`document.getElementById('modal-title').textContent`)

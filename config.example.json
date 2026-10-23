@@ -9,6 +9,7 @@
   "maxPatchBytes": 2097152,
   "windows": {
     "explorer": "/mnt/c/Windows/explorer.exe",
-    "wt": "/mnt/c/Users/<你的 Windows 用户名>/AppData/Local/Microsoft/WindowsApps/wt.exe"
+    "wt": "/mnt/c/Users/<你的 Windows 用户名>/AppData/Local/Microsoft/WindowsApps/wt.exe",
+    "code": "/mnt/c/Users/<你的 Windows 用户名>/AppData/Local/Programs/Microsoft VS Code/bin/code"
   }
 }

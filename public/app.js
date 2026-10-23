@@ -310,12 +310,14 @@ function renderWorktrees() {
     tr.appendChild(flags)
 
     const actions = document.createElement('td')
-    const isUnusable = wt.prunable
+    // 行内只留「更多」和「删除」：四个操作挤在一行会把表格撑得很宽，
+    // 而且每行都重复同样的文字按钮，扫视时很吵。
     actions.innerHTML = `<div class="row-actions">
-      <button class="icon-btn" data-act="checkout" title="切换分支" ${isUnusable ? 'disabled' : ''}>切换</button>
-      <button class="icon-btn" data-act="pull" title="拉取上游更新" ${isUnusable || wt.detached ? 'disabled' : ''}>拉取</button>
-      <button class="icon-btn" data-act="explorer" title="在资源管理器中打开">资源</button>
-      <button class="icon-btn" data-act="wt" title="在 Windows Terminal 中打开">终端</button>
+      <button class="icon-btn" data-act="menu" title="更多操作">
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+          <circle cx="3.2" cy="8" r="1.25"/><circle cx="8" cy="8" r="1.25"/><circle cx="12.8" cy="8" r="1.25"/>
+        </svg>
+      </button>
       <button class="icon-btn danger-hover" data-act="remove" title="删除此 worktree" ${wt.isMain ? 'disabled' : ''}>删除</button>
     </div>`
     tr.appendChild(actions)
@@ -327,6 +329,145 @@ function renderWorktrees() {
   if (!state.worktrees.length) body.innerHTML = ''
 }
 
+// ---------- worktree 行的「更多」菜单 ----------
+const ROW_ICONS = {
+  branch: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.8" stroke="currentColor" stroke-width="1.3"/><circle cx="4.5" cy="12.5" r="1.8" stroke="currentColor" stroke-width="1.3"/><circle cx="11.5" cy="6.5" r="1.8" stroke="currentColor" stroke-width="1.3"/><path d="M4.5 5.3v5.4M11.5 8.3c0 2.2-2 3-4.6 3.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>',
+  pull: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M8 2.5v8M4.8 7.5L8 10.7l3.2-3.2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 13h10" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+  folder: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.3c.4 0 .8.2 1 .5l.7 1h5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
+  terminal: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 6.4L6.6 8l-2 1.6M8.4 10h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  vscode: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11.3 2.2L5.6 7.4 3.4 5.7 2 6.4v3.2l1.4.7 2.2-1.7 5.7 5.2 2.7-1.3V3.5l-2.7-1.3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M11.3 5.2v5.6" stroke="currentColor" stroke-width="1.2"/></svg>',
+}
+
+let rowMenuEl = null
+
+function closeRowMenu() {
+  if (rowMenuEl) { rowMenuEl.remove(); rowMenuEl = null }
+  document.removeEventListener('mousedown', onRowMenuOutside, true)
+  window.removeEventListener('scroll', closeRowMenu, true)
+  window.removeEventListener('resize', closeRowMenu)
+}
+
+function onRowMenuOutside(e) {
+  if (rowMenuEl && !rowMenuEl.contains(e.target)) closeRowMenu()
+}
+
+/**
+ * 在按钮下方弹出菜单。
+ * 用 fixed 定位挂到 body 上：表格容器是 overflow:auto，
+ * 直接放在行里会被裁掉一半。
+ */
+function openRowMenu(anchor, items) {
+  closeRowMenu()
+  const el = document.createElement('div')
+  el.className = 'row-menu'
+
+  for (const it of items) {
+    if (it.sep) {
+      const sep = document.createElement('div')
+      sep.className = 'row-menu-sep'
+      el.appendChild(sep)
+      continue
+    }
+    const btn = document.createElement('button')
+    btn.className = 'row-menu-item' + (it.danger ? ' danger' : '')
+    btn.disabled = Boolean(it.disabled)
+    btn.title = it.title || ''
+    const icon = document.createElement('span')
+    icon.className = 'rmi-icon'
+    icon.innerHTML = it.icon || ''
+    const label = document.createElement('span')
+    label.className = 'rmi-label'
+    label.textContent = it.label
+    btn.appendChild(icon)
+    btn.appendChild(label)
+    if (it.disabled && it.reason) {
+      const why = document.createElement('span')
+      why.className = 'rmi-why'
+      why.textContent = it.reason
+      btn.appendChild(why)
+    }
+    btn.addEventListener('click', () => {
+      closeRowMenu()
+      it.onClick()
+    })
+    el.appendChild(btn)
+  }
+
+  document.body.appendChild(el)
+
+  const r = anchor.getBoundingClientRect()
+  const w = el.offsetWidth
+  const h = el.offsetHeight
+  // 右对齐按钮，下方展开；下面放不下就翻到上方
+  let left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8))
+  let top = r.bottom + 4
+  if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 4)
+  el.style.left = `${Math.round(left)}px`
+  el.style.top = `${Math.round(top)}px`
+
+  rowMenuEl = el
+  // 延迟绑定：否则打开菜单的这一次点击会立刻把它关掉
+  setTimeout(() => {
+    document.addEventListener('mousedown', onRowMenuOutside, true)
+    window.addEventListener('scroll', closeRowMenu, true)
+    window.addEventListener('resize', closeRowMenu)
+  }, 0)
+}
+
+/** 一行 worktree 能做的操作 */
+function buildWtMenu(wt) {
+  const blocked = wt.prunable
+  const openTo = (target) => async () => {
+    try {
+      const r = await api('/api/open', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target, path: wt.path }),
+      })
+      if (!r.ok) toast(`打开失败：${r.error || ''}`, true)
+    } catch (err) {
+      toast(`打开失败：${err.message}`, true)
+    }
+  }
+
+  return [
+    {
+      icon: ROW_ICONS.branch,
+      label: '切换分支',
+      disabled: blocked,
+      reason: blocked ? '目录不存在' : '',
+      onClick: () => openCheckoutDialog(wt),
+    },
+    {
+      icon: ROW_ICONS.pull,
+      label: '拉取上游',
+      disabled: blocked || wt.detached,
+      reason: wt.detached ? '游离 HEAD' : blocked ? '目录不存在' : '',
+      onClick: () => openPullDialog(wt),
+    },
+    { sep: true },
+    { icon: ROW_ICONS.vscode, label: '用 VS Code 打开', onClick: openTo('vscode') },
+    { icon: ROW_ICONS.folder, label: '打开资源管理器', onClick: openTo('explorer') },
+    { icon: ROW_ICONS.terminal, label: '在终端中打开', onClick: openTo('wt') },
+    { sep: true },
+    {
+      icon: ROW_ICONS.folder,
+      label: '复制 UNC 路径',
+      onClick: async () => {
+        // distro 名由后端决定（/api/config 返回），别在前端硬编码
+        const distro = state.distro || 'archlinux'
+        const unc = `\\\\wsl.localhost\\${distro}${wt.path.replace(/\//g, '\\')}`
+        try {
+          await navigator.clipboard.writeText(unc)
+          toast('已复制 UNC 路径')
+        } catch {
+          toast(unc)
+        }
+      },
+    },
+  ]
+}
+
 $('wt-body').addEventListener('click', async (e) => {
   const btn = e.target.closest('.icon-btn')
   if (!btn || btn.disabled) return
@@ -336,6 +477,7 @@ $('wt-body').addEventListener('click', async (e) => {
   const wt = state.worktrees.find((w) => w.path === path)
   if (!wt) return
 
+  if (act === 'menu') { openRowMenu(btn, buildWtMenu(wt)); return }
   if (act === 'checkout') return openCheckoutDialog(wt)
   if (act === 'pull') return openPullDialog(wt)
   if (act === 'remove') return openRemoveDialog(wt)
@@ -688,6 +830,7 @@ async function init() {
   try {
     const cfg = await api('/api/config')
     state.roots = cfg.roots || []
+    state.distro = cfg.distro || 'archlinux'
     $('roots').textContent = cfg.roots.join(', ')
   } catch {}
   await loadRepos()

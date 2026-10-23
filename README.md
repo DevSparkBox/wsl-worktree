@@ -364,7 +364,7 @@ if (e.target.closest('a.ext-link')) return
 |---|---|
 | 跨仓库总览 | 左侧列表，按目录分组，显示 worktree 数徽章与脏标记 |
 | worktree 表格 | 分支、路径、改动文件数、ahead/behind、主/锁定/待清理徽章 |
-| 打开位置 | 行内按钮：资源管理器、Windows Terminal |
+| 打开位置 | 行内「更多」菜单：VS Code / 资源管理器 / 终端 / 复制 UNC 路径 |
 | 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
 | 工单链接可点 | commit message 里的 http(s) URL 自动变链接，新标签页打开 |
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |

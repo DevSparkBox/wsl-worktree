@@ -1218,3 +1218,53 @@ body.resizing * { cursor: col-resize !important; }
   line-height: 1.6;
   word-break: break-word;
 }
+
+/* ---------- worktree 行的「更多」菜单 ---------- */
+.row-menu {
+  position: fixed;
+  z-index: 70;
+  min-width: 176px;
+  padding: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .14);
+}
+.row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: 12px var(--sans);
+  text-align: left;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.row-menu-item:hover:not(:disabled) { background: var(--bg-hover); }
+.row-menu-item:disabled { opacity: .45; cursor: default; }
+.row-menu-item.danger { color: var(--red); }
+.row-menu-item.danger .rmi-icon { color: var(--red); }
+.rmi-icon {
+  flex: none;
+  width: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-dim);
+}
+.rmi-label { flex: 1; white-space: nowrap; }
+/* 禁用的原因（游离 HEAD / 目录不存在）跟在右边，避免用户猜 */
+.rmi-why {
+  flex: none;
+  font: 10px var(--sans);
+  color: var(--text-faint);
+}
+.row-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 2px;
+}

@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { readFile, stat } from 'node:fs/promises'
 import { join, dirname, basename, extname, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -148,6 +148,16 @@ async function getFileDiff(toplevel, sha, path, mode = 'commit') {
 }
 
 // ---------- 打开 Windows 程序 ----------
+/** 命令是否存在（用于判断 WSL 里有没有 code） */
+function hasCommand(name) {
+  try {
+    execFileSync('which', [name], { stdio: 'ignore' })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function openOnWindows(exe, args) {
   try {
     const child = spawn(exe, args, { detached: true, stdio: 'ignore' })
@@ -195,7 +205,7 @@ const server = createServer(async (req, res) => {
 
   try {
     if (p === '/api/config') {
-      return json(res, 200, { roots: cfg.roots, scanMaxDepth: cfg.scanMaxDepth })
+      return json(res, 200, { roots: cfg.roots, scanMaxDepth: cfg.scanMaxDepth, distro: process.env.WSL_DISTRO_NAME || 'archlinux' })
     }
 
     if (p === '/api/repos') {
@@ -609,6 +619,28 @@ const server = createServer(async (req, res) => {
         const distro = process.env.WSL_DISTRO_NAME || 'archlinux'
         // wt -d <起始目录> wsl.exe -d <distro> --cd <linux path>
         return json(res, 200, openOnWindows(cfg.windows.wt, ['-d', unc, 'wsl.exe', '-d', distro, '--cd', path]))
+      }
+      if (target === 'vscode') {
+        // 两条路：
+        //   1. WSL 里有 code 命令（装了 Remote - WSL）→ 直接传 Linux 路径，扩展会自己处理
+        //   2. 否则用 Windows 侧的 code.cmd → 必须转成 UNC 路径
+        // 顺序不能反：Windows 的 code 拿 Linux 路径是不认的。
+        if (hasCommand('code')) {
+          try {
+            const child = spawn('code', [path], { detached: true, stdio: 'ignore' })
+            child.unref()
+            return json(res, 200, { ok: true })
+          } catch (err) {
+            return json(res, 200, { ok: false, error: String(err?.message || err) })
+          }
+        }
+        if (cfg.windows.code) {
+          return json(res, 200, openOnWindows(cfg.windows.code, [toUnc(path)]))
+        }
+        return json(res, 400, {
+          ok: false,
+          error: '找不到 VS Code：WSL 里没有 code 命令（可装 Remote - WSL），config.json 里也没配 windows.code',
+        })
       }
       return json(res, 400, { ok: false, error: 'unknown target' })
     }
