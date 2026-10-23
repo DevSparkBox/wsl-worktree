@@ -28,50 +28,69 @@
 </header>
 
 <main class="t-layout" id="t-layout">
-  <!-- 左：文件树 -->
+  <!-- 左：文件树 / 内容搜索（两个视图，各带各的控件） -->
   <section class="t-tree-pane">
-    <div class="t-tree-head">
-      <div class="t-search">
-        <input class="t-filter" id="t-filter" placeholder="过滤路径…" spellcheck="false">
-        <div class="t-mode" role="group" aria-label="搜索模式">
-          <button class="t-mode-btn active" id="t-mode-path" title="按路径过滤（只看树，不发请求）">路径</button>
-          <button class="t-mode-btn" id="t-mode-content" title="在文件内容里搜（作用于此提交的快照）">内容</button>
-        </div>
-      </div>
-      <label class="t-toggle" id="t-compact-wrap" title="把只有一个子目录的层级合并成一行（如 com/mysoft/jmpt）">
-        <input type="checkbox" id="t-compact" checked>
-        <span>合并目录</span>
-      </label>
-      <button class="t-icon-btn" id="t-collapse-all" title="全部折叠">
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-          <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" transform="rotate(90 6 6)"/>
+    <div class="t-views" role="tablist" aria-label="左侧视图">
+      <button class="t-view-tab active" id="t-tab-tree" role="tab" aria-selected="true">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M2.5 3.5h3.5M2.5 8h3.5M2.5 12.5h3.5M8.5 3.5h5M8.5 8h5M8.5 12.5h5"
+                stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
         </svg>
+        文件树
       </button>
-    </div>
-
-    <!-- 内容搜索的选项栏：只在「内容」模式下显示 -->
-    <div class="t-grep-bar" id="t-grep-bar" hidden>
-      <label class="t-toggle" title="忽略大小写">
-        <input type="checkbox" id="t-grep-icase">
-        <span>忽略大小写</span>
-      </label>
-      <label class="t-toggle" title="按正则表达式匹配（默认按字面量）">
-        <input type="checkbox" id="t-grep-regex">
-        <span>正则</span>
-      </label>
-      <label class="t-toggle" title="只搜选中的目录（在树里点一个目录后再勾）">
-        <input type="checkbox" id="t-grep-scope">
-        <span>限当前目录</span>
-      </label>
+      <button class="t-view-tab" id="t-tab-search" role="tab" aria-selected="false">
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M10.5 10.5L13.5 13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+        </svg>
+        搜索
+      </button>
       <div class="spacer"></div>
       <span class="t-grep-stat" id="t-grep-stat"></span>
     </div>
 
-    <div class="t-tree-wrap" id="t-tree-wrap">
-      <div class="t-tree" id="t-tree" role="tree"></div>
-      <div class="t-empty" id="t-tree-empty" hidden></div>
-      <!-- 内容搜索结果：替换树的位置显示 -->
-      <div class="t-grep-results" id="t-grep-results" hidden></div>
+    <!-- 视图一：文件树 -->
+    <div class="t-view" id="t-view-tree">
+      <div class="t-tree-head">
+        <input class="t-filter" id="t-filter" placeholder="过滤路径…" spellcheck="false">
+        <button class="t-icon-btn" id="t-toggle-compact"
+                title="合并只有一个子目录的层级（如 com/mysoft/jmpt）" aria-pressed="true">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <path d="M4 3h8M4 13h8M8 5.5v5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="t-icon-btn" id="t-collapse-all" title="全部折叠">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+            <path d="M2.5 4.5L6 8l3.5-3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" transform="rotate(90 6 6)"/>
+          </svg>
+        </button>
+      </div>
+      <div class="t-tree-wrap" id="t-tree-wrap">
+        <div class="t-tree" id="t-tree" role="tree"></div>
+        <div class="t-empty" id="t-tree-empty" hidden></div>
+      </div>
+    </div>
+
+    <!-- 视图二：内容搜索（搜的是这个提交的快照，不是磁盘） -->
+    <div class="t-view" id="t-view-search" hidden>
+      <div class="t-tree-head">
+        <input class="t-filter" id="t-grep-input" placeholder="搜索文件内容…" spellcheck="false">
+      </div>
+      <div class="t-grep-bar" id="t-grep-bar">
+        <label class="t-toggle" title="忽略大小写">
+          <input type="checkbox" id="t-grep-icase">
+          <span>Aa</span>
+        </label>
+        <label class="t-toggle" title="按正则表达式匹配（默认按字面量）">
+          <input type="checkbox" id="t-grep-regex">
+          <span>.*</span>
+        </label>
+        <label class="t-toggle" title="只搜选中的目录（在文件树里点一个目录后再勾）">
+          <input type="checkbox" id="t-grep-scope">
+          <span>限当前目录</span>
+        </label>
+      </div>
+      <div class="t-grep-results" id="t-grep-results"></div>
     </div>
   </section>
 
@@ -118,7 +137,24 @@
           <input id="t-outline-filter" placeholder="过滤符号…" spellcheck="false" autocomplete="off">
         </div>
         <div class="t-outline-list" id="t-outline-list" role="tree"></div>
-        <div class="t-outline-foot" id="t-outline-foot" hidden></div>
+
+        <!-- 当前符号的引用：独立分区，未选中符号时整段隐藏 -->
+        <div class="t-outline-refs" id="t-outline-refs" hidden>
+          <div class="t-outline-refs-head">
+            <span class="t-refs-label">引用</span>
+            <span class="t-refs-sym" id="t-refs-sym"></span>
+          </div>
+          <div class="t-outline-refs-list" id="t-outline-refs-list"></div>
+          <div class="t-outline-refs-foot">
+            <button class="o-search-all" id="t-search-all" title="在左侧搜索整个提交快照">
+              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/>
+                <path d="M10.5 10.5L13.5 13.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+              </svg>
+              在所有文件中搜索
+            </button>
+          </div>
+        </div>
       </aside>
     </div>
   </section>

@@ -133,34 +133,37 @@ await send('Page.navigate', { url: `http://localhost:7801/tree.html?repo=${ID}&s
 await sleep(6000)
 
 const init = await ev(`({
-  modePath: document.getElementById('t-mode-path').classList.contains('active'),
-  grepBarHidden: document.getElementById('t-grep-bar').hidden,
+  treeTab: document.getElementById('t-tab-tree').classList.contains('active'),
+  searchViewHidden: document.getElementById('t-view-search').hidden,
   treeVisible: document.getElementById('t-tree').offsetParent !== null,
   placeholder: document.getElementById('t-filter').placeholder,
+  legacyModeBtn: Boolean(document.getElementById('t-mode-content')),
 })`)
-check('默认是路径模式', init.value?.modePath === true, init.value?.placeholder)
-check('内容选项栏默认隐藏', init.value?.grepBarHidden === true, '')
+check('默认在文件树视图', init.value?.treeTab === true, init.value?.placeholder)
+check('搜索视图默认隐藏', init.value?.searchViewHidden === true, '')
 check('默认显示文件树', init.value?.treeVisible === true, '')
+check('旧的「路径/内容」分段按钮已移除', init.value?.legacyModeBtn === false, '')
 
-// 切到内容模式
-await ev(`document.getElementById('t-mode-content').click()`)
+// 切到搜索视图
+await ev(`document.getElementById('t-tab-search').click()`)
 await sleep(500)
 const modeSwitch = await ev(`({
-  modeContent: document.getElementById('t-mode-content').classList.contains('active'),
-  grepBarHidden: document.getElementById('t-grep-bar').hidden,
-  treeVisible: document.getElementById('t-tree').offsetParent !== null,
+  searchTab: document.getElementById('t-tab-search').classList.contains('active'),
+  searchViewVisible: !document.getElementById('t-view-search').hidden,
+  treeViewHidden: document.getElementById('t-view-tree').hidden,
   resultsVisible: document.getElementById('t-grep-results').offsetParent !== null,
-  placeholder: document.getElementById('t-filter').placeholder,
+  focused: document.activeElement?.id,
+  placeholder: document.getElementById('t-grep-input').placeholder,
   hint: document.getElementById('t-grep-results').textContent.trim().slice(0, 20),
 })`)
-check('切到内容模式', modeSwitch.value?.modeContent === true, modeSwitch.value?.placeholder)
-check('内容选项栏显示', modeSwitch.value?.grepBarHidden === false, '')
-check('树被隐藏（hidden 生效）', modeSwitch.value?.treeVisible === false, '')
+check('切到搜索视图', modeSwitch.value?.searchTab === true, modeSwitch.value?.focused)
+check('搜索视图显示（含选项栏）', modeSwitch.value?.searchViewVisible === true, modeSwitch.value?.placeholder)
+check('文件树视图被隐藏', modeSwitch.value?.treeViewHidden === true, '')
 check('结果区显示且有提示', modeSwitch.value?.resultsVisible === true && /输入关键词/.test(modeSwitch.value?.hint || ''),
   modeSwitch.value?.hint)
 
 // 输入搜索
-await ev(`(() => { const i=document.getElementById('t-filter'); i.value='AuthorizationHelper'; i.dispatchEvent(new Event('input',{bubbles:true})) })()`)
+await ev(`(() => { const i=document.getElementById('t-grep-input'); i.value='AuthorizationHelper'; i.dispatchEvent(new Event('input',{bubbles:true})) })()`)
 await sleep(2200)
 const searched = await ev(`({
   files: document.querySelectorAll('.t-grep-file').length,
@@ -210,7 +213,7 @@ await shot('tree-grep-jump.png')
 // 注意：必须用一个大小写敏感的查询词——像 AuthorizationHelper 这种
 // 各处写法完全一致的名字，勾不勾忽略大小写结果都一样，测不出问题。
 // 实测 backend/src 下 'todo'：敏感 149 处，不敏感 498 处。
-await ev(`(() => { const i=document.getElementById('t-filter'); i.value='todo'; i.dispatchEvent(new Event('input',{bubbles:true})) })()`)
+await ev(`(() => { const i=document.getElementById('t-grep-input'); i.value='todo'; i.dispatchEvent(new Event('input',{bubbles:true})) })()`)
 await sleep(2400)
 const beforeIcase = await ev(`({
   hits: document.querySelectorAll('.t-grep-hit').length,
@@ -229,7 +232,7 @@ await ev(`(() => { const c=document.getElementById('t-grep-icase'); c.checked=fa
 await sleep(2200)
 
 // 无命中提示
-await ev(`(() => { const i=document.getElementById('t-filter'); i.value='ZZZZNOPE999'; i.dispatchEvent(new Event('input',{bubbles:true})) })()`)
+await ev(`(() => { const i=document.getElementById('t-grep-input'); i.value='ZZZZNOPE999'; i.dispatchEvent(new Event('input',{bubbles:true})) })()`)
 await sleep(2200)
 const noHit = await ev(`({
   empty: document.querySelector('.t-grep-empty')?.textContent || '',
@@ -240,29 +243,29 @@ check('无命中显示提示', noHit.value?.files === 0 && /没有匹配/.test(n
   noHit.value?.empty?.slice(0, 30))
 
 // Esc 清空
-await ev(`document.getElementById('t-filter').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
+await ev(`document.getElementById('t-grep-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))`)
 await sleep(500)
 const escaped = await ev(`({
-  value: document.getElementById('t-filter').value,
+  value: document.getElementById('t-grep-input').value,
   hint: document.getElementById('t-grep-results').textContent.trim().slice(0, 12),
 })`)
 check('Esc 清空并回到提示', escaped.value?.value === '' && /输入关键词/.test(escaped.value?.hint || ''),
   escaped.value?.hint)
 
-// 切回路径模式
-await ev(`document.getElementById('t-mode-path').click()`)
+// 切回文件树视图
+await ev(`document.getElementById('t-tab-tree').click()`)
 await sleep(700)
 const backPath = await ev(`({
   treeVisible: document.getElementById('t-tree').offsetParent !== null,
   resultsVisible: document.getElementById('t-grep-results').offsetParent !== null,
-  grepBarHidden: document.getElementById('t-grep-bar').hidden,
+  searchViewHidden: document.getElementById('t-view-search').hidden,
   dirs: document.querySelectorAll('.t-dir').length,
   placeholder: document.getElementById('t-filter').placeholder,
 })`)
-check('切回路径模式恢复树', backPath.value?.treeVisible === true && backPath.value?.dirs > 0,
+check('切回文件树视图恢复树', backPath.value?.treeVisible === true && backPath.value?.dirs > 0,
   `${backPath.value?.dirs} 个目录`)
 check('切回后隐藏结果区', backPath.value?.resultsVisible === false, '')
-check('切回后隐藏选项栏', backPath.value?.grepBarHidden === true, '')
+check('切回后隐藏搜索视图（含选项栏）', backPath.value?.searchViewHidden === true, '')
 
 // 路径过滤仍然工作（回归）
 await ev(`(() => { const i=document.getElementById('t-filter'); i.value='pom.xml'; i.dispatchEvent(new Event('input',{bubbles:true})) })()`)

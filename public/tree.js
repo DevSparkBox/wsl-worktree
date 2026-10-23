@@ -295,8 +295,8 @@ function jumpToLine(line) {
 /** 大纲底部按钮：把这个符号名交给左侧的内容搜索（等价于在那儿手输） */
 function searchInAllFiles(name) {
   if (!name) return
-  setMode('content')
-  $('t-filter').value = name
+  setView('search')
+  $('t-grep-input').value = name
   runGrep(name)
 }
 
@@ -305,7 +305,11 @@ const outline = createOutline({
   listEl: $('t-outline-list'),
   countEl: $('t-outline-count'),
   filterEl: $('t-outline-filter'),
-  footEl: $('t-outline-foot'),
+  // 引用是独立分区，不在符号树里内联
+  refsEl: $('t-outline-refs'),
+  refsTitleEl: $('t-refs-sym'),
+  refsListEl: $('t-outline-refs-list'),
+  searchAllBtn: $('t-search-all'),
   jumpToLine,
   onSearchAll: searchInAllFiles,
 })
@@ -561,37 +565,35 @@ function applyFilter() {
 let grepTimer = null
 let grepSeq = 0
 
-/** 切换 路径 / 内容 模式 */
-function setMode(mode) {
+/** 切换左侧视图：文件树 / 内容搜索 */
+function setView(view) {
+  const mode = view === 'search' ? 'content' : 'path'
   if (state.mode === mode) return
   state.mode = mode
-  $('t-mode-path').classList.toggle('active', mode === 'path')
-  $('t-mode-content').classList.toggle('active', mode === 'content')
-  $('t-grep-bar').hidden = mode !== 'content'
-  $('t-filter').placeholder = mode === 'content' ? '搜索文件内容…' : '过滤路径…'
-  $('t-filter').value = ''
-  state.filter = ''
-  state.matched = null
+
+  $('t-tab-tree').classList.toggle('active', view === 'tree')
+  $('t-tab-search').classList.toggle('active', view === 'search')
+  $('t-tab-tree').setAttribute('aria-selected', String(view === 'tree'))
+  $('t-tab-search').setAttribute('aria-selected', String(view === 'search'))
+  $('t-view-tree').hidden = view !== 'tree'
+  $('t-view-search').hidden = view !== 'search'
+
   state.grep = null
   state.grepQuery = ''
 
-  if (mode === 'content') {
-    // 内容模式：隐藏树，等用户输入
-    $('t-tree').hidden = true
-    $('t-tree-empty').hidden = true
-    showGrepPlaceholder()
+  if (view === 'search') {
+    // 搜索结果不复用树，直接在自己的容器里渲染
+    $('t-grep-stat').textContent = ''
+    if (!$('t-grep-input').value.trim()) showGrepPlaceholder()
+    $('t-grep-input').focus()
   } else {
-    // 回到路径模式：恢复树
-    $('t-tree').hidden = false
-    $('t-grep-results').hidden = true
     renderTree()
+    $('t-filter').focus()
   }
-  $('t-filter').focus()
 }
 
 function showGrepPlaceholder(text) {
   const box = $('t-grep-results')
-  box.hidden = false
   box.innerHTML = `<div class="t-grep-empty">${esc(text ||
     '输入关键词搜索文件内容。搜索范围是这个提交的快照，不是当前磁盘。')}</div>`
   $('t-grep-stat').textContent = ''
@@ -600,7 +602,7 @@ function showGrepPlaceholder(text) {
 /** 执行搜索（带防抖） */
 function scheduleGrep() {
   clearTimeout(grepTimer)
-  const q = $('t-filter').value.trim()
+  const q = $('t-grep-input').value.trim()
   if (!q) {
     state.grep = null
     state.grepQuery = ''
@@ -616,8 +618,6 @@ async function runGrep(q) {
   state.grepQuery = q
   state.grepBusy = true
   const box = $('t-grep-results')
-  box.hidden = false
-  $('t-tree').hidden = true
   box.innerHTML = '<div class="t-grep-empty">搜索中…</div>'
   $('t-grep-stat').textContent = ''
 
@@ -645,8 +645,6 @@ async function runGrep(q) {
 
 function renderGrepResults(data, elapsedMs) {
   const box = $('t-grep-results')
-  box.hidden = false
-  $('t-tree').hidden = true
 
   const files = data.files || []
   if (!files.length) {
@@ -656,15 +654,11 @@ function renderGrepResults(data, elapsedMs) {
     return
   }
 
+  // 统计只放在视图顶栏，结果区不再重复一行汇总
   $('t-grep-stat').textContent =
     `${files.length} 个文件 · ${data.total} 处` + (data.truncated ? ' · 已截断' : '') + ` · ${elapsedMs}ms`
 
   const frag = document.createDocumentFragment()
-  // 顶层给一个「全部折叠/展开」式的汇总行
-  const sum = document.createElement('div')
-  sum.className = 't-grep-sum'
-  sum.textContent = `${files.length} 个文件命中，共 ${data.total} 处`
-  frag.appendChild(sum)
 
   for (const f of files) {
     const group = document.createElement('div')
@@ -693,7 +687,7 @@ function renderGrepResults(data, elapsedMs) {
       // 所以只在字面量模式下做标记）
       const marked = $('t-grep-regex').checked
         ? esc(h.text)
-        : markText(h.text, $('t-filter').value.trim(), $('t-grep-icase').checked)
+        : markText(h.text, $('t-grep-input').value.trim(), $('t-grep-icase').checked)
       row.innerHTML =
         `<span class="t-grep-ln">${h.line}</span>` +
         `<span class="t-grep-code">${marked}</span>`
@@ -768,39 +762,41 @@ initSplitter({
 })
 
 // ---------- 事件绑定 ----------
-// 输入框：按模式分发（路径过滤是纯前端，内容搜索要打接口）
-$('t-filter').addEventListener('input', () => {
-  if (state.mode === 'content') scheduleGrep()
-  else applyFilter()
-})
+// 两个视图各有自己的输入框：路径过滤是纯前端，内容搜索要打接口
+$('t-filter').addEventListener('input', applyFilter)
 $('t-filter').addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     e.target.value = ''
-    if (state.mode === 'content') {
-      state.grep = null
-      state.grepQuery = ''
-      showGrepPlaceholder()
-    } else {
-      applyFilter()
-    }
+    applyFilter()
   }
-  // Enter：内容模式下立即搜（不等防抖）
-  if (e.key === 'Enter' && state.mode === 'content') {
+})
+
+$('t-grep-input').addEventListener('input', scheduleGrep)
+$('t-grep-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    e.target.value = ''
+    state.grep = null
+    state.grepQuery = ''
+    showGrepPlaceholder()
+    return
+  }
+  // Enter：立即搜，不等防抖
+  if (e.key === 'Enter') {
     e.preventDefault()
     clearTimeout(grepTimer)
-    const q = $('t-filter').value.trim()
+    const q = $('t-grep-input').value.trim()
     if (q) runGrep(q)
   }
 })
 
-// 模式切换
-$('t-mode-path').addEventListener('click', () => setMode('path'))
-$('t-mode-content').addEventListener('click', () => setMode('content'))
+// 视图切换
+$('t-tab-tree').addEventListener('click', () => setView('tree'))
+$('t-tab-search').addEventListener('click', () => setView('search'))
 
 // 搜索选项变化后重新执行（限当前目录、忽略大小写、正则都会影响结果）
 for (const id of ['t-grep-icase', 't-grep-regex', 't-grep-scope']) {
   $(id).addEventListener('change', () => {
-    const q = $('t-filter').value.trim()
+    const q = $('t-grep-input').value.trim()
     if (q) runGrep(q)
   })
 }
@@ -811,9 +807,11 @@ $('t-collapse-all').addEventListener('click', () => {
   toast('已全部折叠')
 })
 
-// 「合并目录」开关：关掉后恢复原始的逐层展开形态
-$('t-compact').addEventListener('change', (e) => {
-  state.compact = e.target.checked
+// 「合并目录」开关：关掉后恢复原始的逐层展开形态（图标按钮，按下态表示开启）
+$('t-toggle-compact').addEventListener('click', () => {
+  state.compact = !state.compact
+  $('t-toggle-compact').classList.toggle('active', state.compact)
+  $('t-toggle-compact').setAttribute('aria-pressed', String(state.compact))
   try { localStorage.setItem('wsl-worktree.treeCompact', state.compact ? '1' : '0') } catch {}
   // 重建树。展开状态保留：压缩节点的 path 是链末级，切换后仍能对上；
   // 原先展开的中间层在压缩模式下已经不存在，会被自然忽略。
@@ -909,7 +907,8 @@ async function init() {
     return
   }
   $('t-wt').textContent = wtPath ? wtPath.split('/').filter(Boolean).slice(-1)[0] : ''
-  $('t-compact').checked = state.compact
+  $('t-toggle-compact').classList.toggle('active', state.compact)
+  $('t-toggle-compact').setAttribute('aria-pressed', String(state.compact))
   $('t-hl').checked = state.highlight
   // 大纲默认展开（记住上次的选择）
   setOutlineVisible(state.outlineVisible)

@@ -98,6 +98,48 @@
   padding: 6px 8px;
   border-bottom: 1px solid var(--border);
 }
+
+/* ---------- 左侧视图切换：文件树 / 搜索 ----------
+   路径过滤和内容搜索是两种完全不同的操作（前者纯前端过滤文件名，
+   后者 git grep 整个快照），控件和结果形态都不一样，所以分成两个视图，
+   而不是塞一个「路径|内容」分段按钮去改同一个输入框的行为。 */
+.t-views {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-alt);
+}
+.t-view-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  font: 11.5px var(--sans);
+  cursor: pointer;
+}
+.t-view-tab:hover { background: var(--bg-hover); color: var(--text); }
+.t-view-tab.active {
+  background: var(--bg-panel);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
+.t-view-tab svg { flex: none; }
+
+.t-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.t-view[hidden] { display: none; }
+
 .t-filter {
   flex: 1;
   min-width: 0;
@@ -127,6 +169,9 @@
   cursor: pointer;
 }
 .t-icon-btn:hover { background: var(--bg-hover); color: var(--text); }
+/* 切换型图标按钮的按下态（如「合并目录」） */
+.t-icon-btn.active { background: var(--accent-soft); color: var(--accent); }
+.t-icon-btn.active:hover { background: var(--accent-soft); color: var(--accent); }
 
 .t-tree-wrap {
   flex: 1;
@@ -427,41 +472,8 @@
 /* ============================================================
    路径 / 内容 搜索
    ============================================================ */
-.t-search {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.t-search .t-filter { flex: 1; min-width: 0; }
-
-/* 模式切换：两个紧贴的小按钮，比下拉更省一次点击 */
-.t-mode {
-  flex: none;
-  display: flex;
-  border: 1px solid var(--border-strong);
-  border-radius: 5px;
-  overflow: hidden;
-  background: var(--bg);
-}
-.t-mode-btn {
-  font: 10.5px var(--sans);
-  padding: 3px 6px;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  cursor: pointer;
-  white-space: nowrap;
-  line-height: 1.4;
-}
-.t-mode-btn + .t-mode-btn { border-left: 1px solid var(--border); }
-.t-mode-btn:hover { background: var(--bg-hover); color: var(--text); }
-.t-mode-btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-weight: 500;
-}
+/* 原来的 .t-search / .t-mode 分段按钮已随视图切换重做而移除，
+   两个视图各自带输入框，不再共用一个框改 placeholder。 */
 
 /* 内容搜索的选项栏 */
 .t-grep-bar {
@@ -482,11 +494,13 @@
   white-space: nowrap;
 }
 
-/* 搜索结果面板 */
+/* 搜索结果现在是「搜索」视图里的主体区域，不再覆盖在树上 */
 .t-grep-results {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
   padding: 0 0 12px;
 }
-.t-grep-results[hidden] { display: none; }
 .t-grep-empty {
   padding: 18px 14px;
   font-size: 11.5px;
@@ -749,7 +763,9 @@
 }
 /* 返回类型不做独立列：260px 面板里它和名字抢宽度，两边都截断反而都读不懂。
    改为只在 title 里给出。 */
-.o-refs-badge {
+
+/* 符号名右侧的引用数（>1 才显示） */
+.o-refs-count-badge {
   flex: none;
   font: 9px var(--mono);
   color: var(--text-faint);
@@ -759,12 +775,48 @@
   line-height: 14px;
 }
 
-/* 展开的「本文件引用」块 */
-.o-refs {
-  padding: 2px 0 4px 0;
+/* ---------- 引用分区（面板下半部分） ---------- */
+.t-outline-refs {
+  flex: 0 0 40%;
+  min-height: 104px;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border-strong);
   background: var(--bg-alt);
-  border-left: 2px solid var(--border-strong);
-  margin-left: 2px;
+}
+.t-outline-refs[hidden] { display: none; }
+
+.t-outline-refs-head {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--border);
+  overflow: hidden;
+}
+.t-refs-label {
+  flex: none;
+  font: 10px var(--sans);
+  color: var(--text-faint);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+}
+.t-refs-sym {
+  flex: 1;
+  min-width: 0;
+  font: 500 11px var(--mono);
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.t-outline-refs-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 2px 0;
 }
 .o-ref {
   display: flex;
@@ -789,23 +841,29 @@
   white-space: pre;
 }
 .o-ref-def .o-ref-text { color: var(--text); }
-.o-ref-more {
-  padding: 2px 8px 2px 42px;
+.o-refs-more {
+  padding: 3px 8px 3px 42px;
   font: 10px var(--sans);
   color: var(--text-faint);
 }
+.o-refs-empty {
+  padding: 12px 10px;
+  font: 11px var(--sans);
+  color: var(--text-faint);
+  text-align: center;
+}
 
-/* 底部：跨文件搜索 + 空状态 */
-.t-outline-foot {
+.t-outline-refs-foot {
   flex: none;
   border-top: 1px solid var(--border);
   padding: 6px 8px;
-  background: var(--bg-alt);
 }
-.t-outline-foot[hidden] { display: none; }
 .o-search-all {
   width: 100%;
   box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font: 11px var(--sans);
   padding: 5px 8px;
   border: 1px solid var(--border-strong);
@@ -815,9 +873,9 @@
   cursor: pointer;
   text-align: left;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
+.o-search-all svg { flex: none; }
 .o-search-all:hover { border-color: var(--accent); color: var(--accent); }
 
 .o-empty {

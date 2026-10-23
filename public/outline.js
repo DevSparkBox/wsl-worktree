@@ -4,25 +4,64 @@
  * 只负责渲染与交互，符号怎么提取在 symbols.js（纯逻辑、可单测）。
  * 这里通过回调跟宿主页面解耦：跳转、跨文件搜索都由 tree.js 提供。
  *
+ * 布局分两段：
+ *   上：符号树（可过滤、可折叠）
+ *   下：当前符号的引用（独立分区，固定高度，没选中符号时整段隐藏）
+ *
+ * 引用不内联在符号树里，是因为行内插进去会把树打断：层级和「这个符号有几处」
+ * 两件事混在一起，符号一多就没法用了。
+ *
  * 交互约定：
- *   点符号名  → 跳到定义行，并展开「本文件引用」列表
- *   点折叠箭头 → 折叠/展开子树（默认全展开）
- *   点引用行  → 跳到那一行
- *   底部按钮  → 把符号名交给左侧内容搜索
+ *   点符号   → 跳到定义行，下方引用区刷新成该符号
+ *   点引用行 → 跳到那一行
+ *   折叠箭头 → 折叠/展开子树（搜索态不显示，因为强制全展开）
+ *   底部按钮 → 把符号名交给左侧搜索
  */
 
-import { extractSymbols, buildSymbolTree, supportsOutline, findReferences } from '/symbols.js'
+import { extractSymbols, buildSymbolTree, supportsOutline, findReferences, escapeRe } from '/symbols.js'
 
 /** 这些 kind 算「类型」，用方框图标 + 紫色 */
 const TYPE_KINDS = new Set(['class', 'interface', 'enum', 'record', 'struct', 'type', 'delegate', 'annotation'])
-/** 引用列表最多列这么多条，其余用「还有 N 处」收尾 */
-const REFS_LIMIT = 12
+/** 引用区最多列这么多条，其余用「还有 N 处」收尾 */
+const REFS_LIMIT = 60
 
 const keyOf = (s) => `${s.line}:${s.name}`
 
+/**
+ * 一次扫描算出所有符号在本文件里的出现次数。
+ *
+ * 不能对每个符号分别 findReferences：170 个符号 × 7000 行 = 上百万次匹配。
+ * 这里把全部符号名拼成一个正则，全文扫一遍就都有了。
+ * 名字按长度降序排列，避免 `getFoo` 抢走 `getFooBar` 的匹配。
+ */
+function buildRefCounts(content, symbols) {
+  const counts = new Map()
+  const names = [...new Set(symbols.map((s) => s.name).filter(Boolean))]
+  if (!names.length) return counts
+  names.sort((a, b) => b.length - a.length)
+  for (const n of names) counts.set(n, 0)
+  let re
+  try {
+    re = new RegExp(`\\b(${names.map(escapeRe).join('|')})\\b`, 'g')
+  } catch {
+    return counts
+  }
+  for (const line of content.split('\n')) {
+    re.lastIndex = 0
+    let m
+    while ((m = re.exec(line)) !== null) {
+      counts.set(m[1], (counts.get(m[1]) || 0) + 1)
+      // 零宽匹配保护：正则不可能零宽，但加着防止未来改动引入死循环
+      if (m.index === re.lastIndex) re.lastIndex++
+    }
+  }
+  return counts
+}
+
 export function createOutline(opts) {
   const {
-    containerEl, listEl, countEl, filterEl, footEl,
+    containerEl, listEl, countEl, filterEl,
+    refsEl, refsTitleEl, refsListEl, searchAllBtn,
     jumpToLine, onSearchAll,
   } = opts
 
@@ -31,13 +70,13 @@ export function createOutline(opts) {
     lang: '',
     content: '',
     symbols: [],        // 扁平
-    flat: [],           // 渲染顺序（含层级信息），用于滚动联动
+    flat: [],           // 当前渲染出来的节点（滚动联动用）
     root: null,
     collapsed: new Set(),
-    expandedRefs: new Set(),
+    refCounts: new Map(), // 符号名 → 本文件出现次数
+    activeSym: null,    // 当前选中的符号（引用区显示它的引用）
     activeKey: null,
     filter: '',
-    unsupported: false,
   }
 
   // ---------------------------------------------------------- 渲染
@@ -47,28 +86,30 @@ export function createOutline(opts) {
     state.content = content || ''
     state.lang = lang || ''
     state.collapsed.clear()
-    state.expandedRefs.clear()
+    state.refCounts = new Map()
+    state.activeSym = null
     state.activeKey = null
     state.filter = ''
     filterEl.value = ''
-    footEl.hidden = true
+    hideRefs()
 
     if (!supportsOutline(state.lang)) {
       state.symbols = []
       state.flat = []
-      state.unsupported = true
+      state.root = null
       showEmpty(state.content ? '这种文件没有代码符号。' : '')
       countEl.textContent = ''
       return
     }
-    state.unsupported = false
     state.symbols = extractSymbols(state.content, state.lang)
     state.root = buildSymbolTree(state.symbols)
     if (!state.symbols.length) {
+      state.flat = []
       showEmpty('没有识别到类型或函数。')
       countEl.textContent = ''
       return
     }
+    state.refCounts = buildRefCounts(state.content, state.symbols)
     countEl.textContent = String(state.symbols.length)
     renderList()
   }
@@ -79,9 +120,12 @@ export function createOutline(opts) {
     state.root = null
     state.path = ''
     state.content = ''
+    state.activeSym = null
+    state.activeKey = null
+    state.refCounts = new Map()
     listEl.replaceChildren()
     countEl.textContent = ''
-    footEl.hidden = true
+    hideRefs()
   }
 
   function showEmpty(text) {
@@ -91,9 +135,9 @@ export function createOutline(opts) {
   /**
    * 渲染列表。
    *
-   * 搜索时**仍然保持树形**：保留命中节点和它们的祖先，祖先淡色显示作路径上下文。
-   * 早先是拍平成「父名.子名」的一行，结果是 260px 里名字被截成
-   * `OrganizationDomainService.6...`——既看不出层级也看不出方法名。
+   * 搜索时**仍保持树形**：保留命中节点和它们的祖先，祖先淡色显示作路径上下文。
+   * 早先拍平成「父名.子名」的一行，260px 里被截成 `OrganizationDomainService.6...`，
+   * 既看不出层级也看不出方法名。
    */
   function renderList() {
     listEl.replaceChildren()
@@ -105,7 +149,7 @@ export function createOutline(opts) {
       const kw = state.filter.toLowerCase()
       const kids = filterTree(state.root, kw)
       if (!kids.length) { showEmpty('没有匹配的符号。'); return }
-      // 搜索结果全展开：用户要看的是「命中的都在哪几层」，不是折叠状态
+      // 搜索结果全展开：用户要看「命中的都在哪几层」，不是折叠状态
       renderNodes({ children: kids }, 0, frag, kw)
     } else {
       renderNodes(state.root, 0, frag, null)
@@ -114,34 +158,25 @@ export function createOutline(opts) {
     paintActive()
   }
 
-  /**
-   * 按关键词过滤一棵子树，保留命中节点与它们的祖先。
-   * 返回新数组（不破坏原树），命中节点带 _matched 标记供渲染区分。
-   */
+  /** 按关键词过滤子树，保留命中节点与它们的祖先 */
   function filterTree(node, kw) {
     const out = []
     for (const c of node.children) {
       const sub = filterTree(c, kw)
       const matched = c.name.toLowerCase().includes(kw)
-      if (matched || sub.length) {
-        out.push({ ...c, children: sub, _matched: matched })
-      }
+      if (matched || sub.length) out.push({ ...c, children: sub, _matched: matched })
     }
     return out
   }
 
-  /**
-   * @param {string|null} kw 非 null 表示处于搜索态：忽略折叠、祖先淡色
-   */
+  /** @param {string|null} kw 非 null 表示搜索态：忽略折叠、祖先淡色 */
   function renderNodes(node, depth, frag, kw) {
     for (const c of node.children) {
       state.flat.push(c)
       const key = keyOf(c)
-      // 搜索态强制全展开，避免命中项藏在折叠的父节点里看不到
       const isCollapsed = kw ? false : state.collapsed.has(key)
       const dim = Boolean(kw) && c._matched === false
       frag.appendChild(nodeRow(c, depth, isCollapsed, dim, kw))
-      if (state.expandedRefs.has(key)) frag.appendChild(refsBlock(c))
       if (c.children.length && !isCollapsed) renderNodes(c, depth + 1, frag, kw)
     }
   }
@@ -165,11 +200,10 @@ export function createOutline(opts) {
       : '<span class="o-caret o-caret-empty"></span>'
     const icon = isType ? 'T' : sym.kind === 'prop' ? 'P' : 'ƒ'
     const iconCls = isType ? 'o-icon-type' : sym.kind === 'prop' ? 'o-icon-prop' : 'o-icon-fn'
-    // 引用数：只在选中过（缓存过）之后才显示，避免一上来给 200 行文件全算一遍
-    const refs = state.expandedRefs.has(key) ? findReferences(state.content, sym.name, { defLine: sym.line }) : null
-    const badge = refs && refs.length
-      ? `<span class="o-refs-badge" title="本文件内出现 ${refs.length} 次">${refs.length}</span>`
-      : ''
+
+    // 引用数：只在 >1 时显示，避免每个符号后面都挂个「1」
+    const n = state.refCounts.get(sym.name) || 0
+    const badge = n > 1 ? `<span class="o-refs-count-badge" title="本文件内 ${n} 处">${n}</span>` : ''
 
     el.innerHTML =
       caret +
@@ -179,33 +213,48 @@ export function createOutline(opts) {
     return el
   }
 
-  /** 「本文件引用」展开块 */
-  function refsBlock(sym) {
-    const box = document.createElement('div')
-    box.className = 'o-refs'
+  // ---------------------------------------------------------- 引用分区
+
+  function showRefs(sym) {
     const refs = findReferences(state.content, sym.name, { defLine: sym.line })
+
+    refsEl.hidden = false
+    refsTitleEl.textContent = sym.name
+    refsTitleEl.title = sym.name
+    refsListEl.replaceChildren()
+
     if (!refs.length) {
-      box.innerHTML = '<div class="o-ref-more">没有找到其它出现位置</div>'
-      return box
+      refsListEl.innerHTML = '<div class="o-refs-empty">这个文件里没有出现位置</div>'
+      return
     }
+
     const frag = document.createDocumentFragment()
     for (const r of refs.slice(0, REFS_LIMIT)) {
       const row = document.createElement('div')
       row.className = 'o-ref' + (r.isDef ? ' o-ref-def' : '')
       row.dataset.line = String(r.line)
       row.title = r.text
-      row.innerHTML =
-        `<span class="o-ref-line">${r.line}</span><span class="o-ref-text">${escHtml(r.text)}</span>`
+      row.innerHTML = `<span class="o-ref-line">${r.line}</span><span class="o-ref-text">${escHtml(r.text)}</span>`
       frag.appendChild(row)
     }
     if (refs.length > REFS_LIMIT) {
       const more = document.createElement('div')
-      more.className = 'o-ref-more'
+      more.className = 'o-refs-more'
       more.textContent = `还有 ${refs.length - REFS_LIMIT} 处，用下方按钮搜全部文件`
       frag.appendChild(more)
     }
-    box.appendChild(frag)
-    return box
+    refsListEl.appendChild(frag)
+
+    // 让定义那一行在引用区里可见
+    const defRow = refsListEl.querySelector('.o-ref-def')
+    refsListEl.scrollTop = defRow ? Math.max(0, defRow.offsetTop - 8) : 0
+  }
+
+  function hideRefs() {
+    refsEl.hidden = true
+    refsTitleEl.textContent = ''
+    refsListEl.replaceChildren()
+    state.activeSym = null
   }
 
   // ---------------------------------------------------------- 选中与跳转
@@ -216,7 +265,7 @@ export function createOutline(opts) {
     }
   }
 
-  /** 滚动联动：把某个源码行对应的符号标为当前 */
+  /** 滚动联动：把某个源码行对应的符号标为当前（不改变引用区） */
   function syncToLine(line) {
     if (!state.flat.length) return
     let target = null
@@ -229,47 +278,30 @@ export function createOutline(opts) {
     if (key === state.activeKey) return
     state.activeKey = key
     paintActive()
-    // 让当前项在面板里可见（但不抢滚动焦点以外的东西）
+    scrollNodeIntoView(key)
+  }
+
+  function scrollNodeIntoView(key) {
     const el = listEl.querySelector(`.o-node[data-key="${cssEscape(key)}"]`)
-    if (el) {
-      const box = listEl.getBoundingClientRect()
-      const r = el.getBoundingClientRect()
-      if (r.top < box.top + 20) listEl.scrollTop += r.top - box.top - 20
-      else if (r.bottom > box.bottom - 8) listEl.scrollTop += r.bottom - box.bottom + 8
-    }
+    if (!el) return
+    const box = listEl.getBoundingClientRect()
+    const r = el.getBoundingClientRect()
+    if (r.top < box.top + 20) listEl.scrollTop += r.top - box.top - 20
+    else if (r.bottom > box.bottom - 8) listEl.scrollTop += r.bottom - box.bottom + 8
   }
 
   /** 主动选中某个符号（点击时） */
   function selectSymbol(sym) {
+    state.activeSym = sym
     state.activeKey = keyOf(sym)
-    const key = state.activeKey
-    // 再点一次收起引用
-    if (state.expandedRefs.has(key)) state.expandedRefs.delete(key)
-    else state.expandedRefs.add(key)
-    renderList()
-    const el = listEl.querySelector(`.o-node[data-key="${cssEscape(key)}"]`)
-    el?.scrollIntoView({ block: 'nearest' })
-
-    // 底部给跨文件搜索按钮
-    footEl.hidden = false
-    footEl.innerHTML = ''
-    const btn = document.createElement('button')
-    btn.className = 'o-search-all'
-    btn.textContent = `在所有文件中搜索「${sym.name}」`
-    btn.title = `用左侧的内容搜索查 ${sym.name}`
-    btn.addEventListener('click', () => onSearchAll(sym.name))
-    footEl.appendChild(btn)
+    paintActive()
+    scrollNodeIntoView(state.activeKey)
+    showRefs(sym)
   }
 
   // ---------------------------------------------------------- 事件
 
   listEl.addEventListener('click', (e) => {
-    const refRow = e.target.closest('.o-ref')
-    if (refRow) {
-      const line = Number(refRow.dataset.line)
-      if (Number.isFinite(line)) jumpToLine(line)
-      return
-    }
     const row = e.target.closest('.o-node')
     if (!row) return
     const key = row.dataset.key
@@ -285,6 +317,18 @@ export function createOutline(opts) {
     }
     selectSymbol(sym)
     jumpToLine(sym.line)
+  })
+
+  // 引用行点击 → 跳到那一行
+  refsListEl.addEventListener('click', (e) => {
+    const row = e.target.closest('.o-ref')
+    if (!row) return
+    const line = Number(row.dataset.line)
+    if (Number.isFinite(line)) jumpToLine(line)
+  })
+
+  searchAllBtn.addEventListener('click', () => {
+    if (state.activeSym) onSearchAll(state.activeSym.name)
   })
 
   filterEl.addEventListener('input', () => {
@@ -306,7 +350,6 @@ export function createOutline(opts) {
     setVisible(v) { containerEl.hidden = !v },
     isSupported: () => supportsOutline(state.lang),
     symbolCount: () => state.symbols.length,
-    // 测试用：直接问内部状态
     _state: state,
   }
 }
@@ -322,8 +365,7 @@ const CARET_CLOSED =
 
 /**
  * 把名字里命中关键词的那一段包成 <mark>。
- * 先按小写找位置，再对原始字符串切片——避免 toLowerCase 改变长度时错位
- * （某些字符小写后长度会变，虽然标识符里基本遇不到，稳妥起见）。
+ * 先按小写找位置，再对原始字符串切片，避免大小写转换改变长度时错位。
  */
 function markMatch(name, kw) {
   if (!kw) return escHtml(name)

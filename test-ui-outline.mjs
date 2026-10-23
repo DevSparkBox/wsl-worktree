@@ -124,17 +124,26 @@ const clicked = await ev(`(() => {
 await sleep(800)
 const afterClick = await ev(`({
   active: document.querySelector('#t-outline-list .o-node.active .o-name')?.textContent,
-  refs: document.querySelectorAll('.o-refs').length,
-  refRows: document.querySelectorAll('.o-ref').length,
-  badge: document.querySelector('.o-refs-badge')?.textContent || '',
+  // 引用是面板下方的独立分区，不再内联在符号树里
+  refsHidden: document.getElementById('t-outline-refs').hidden,
+  refsTitle: document.getElementById('t-refs-sym').textContent,
+  refRows: document.querySelectorAll('#t-outline-refs .o-ref').length,
+  defMarked: document.querySelectorAll('#t-outline-refs .o-ref-def').length,
+  inlineRefs: document.querySelectorAll('#t-outline-list .o-ref').length,
+  btnSvg: Boolean(document.querySelector('#t-search-all svg')),
   flashRows: document.querySelectorAll('.o-jump-flash').length,
   bodyScroll: Math.round(document.getElementById('t-file-body').scrollTop),
 })`)
 check('点符号后大纲高亮它', afterClick.value?.active === clicked.value?.name,
   `${clicked.value?.name}`)
-check('点符号后展开「本文件引用」', afterClick.value?.refs > 0 && afterClick.value?.refRows > 0,
+check('点符号后下方出现引用分区',
+  afterClick.value?.refsHidden === false && afterClick.value?.refRows > 0,
   `${afterClick.value?.refRows} 行`)
-check('符号旁显示引用数徽章', (afterClick.value?.badge || '').length > 0, afterClick.value?.badge)
+check('引用分区标题是当前符号', afterClick.value?.refsTitle === clicked.value?.name,
+  afterClick.value?.refsTitle)
+check('引用不再内联在符号树里', afterClick.value?.inlineRefs === 0, '')
+check('定义那一行在引用区里被标出', afterClick.value?.defMarked >= 1, '')
+check('搜索全部文件按钮带图标', afterClick.value?.btnSvg === true, '')
 check('跳转时该行有闪烁高亮', afterClick.value?.flashRows > 0, `${afterClick.value?.flashRows} 行`)
 
 // 点引用行 → 跳到那一行
@@ -194,13 +203,13 @@ await sleep(300)
 await ev(`document.querySelector('.o-search-all')?.click()`)
 await sleep(1200)
 const searched = await ev(`({
-  modeContent: document.getElementById('t-mode-content').classList.contains('active'),
-  query: document.getElementById('t-filter').value,
-  resultsVisible: !document.getElementById('t-grep-results').hidden,
+  searchTab: document.getElementById('t-tab-search').classList.contains('active'),
+  query: document.getElementById('t-grep-input').value,
+  viewVisible: !document.getElementById('t-view-search').hidden,
 })`)
-check('跨文件搜索切到内容模式', searched.value?.modeContent === true, '')
+check('跨文件搜索切到搜索视图', searched.value?.searchTab === true && searched.value?.viewVisible === true, '')
 check('跨文件搜索填入符号名', /^[A-Za-z_]\w*$/.test(searched.value?.query || ''), searched.value?.query)
-check('跨文件搜索触发结果区', searched.value?.resultsVisible === true, '')
+check('跨文件搜索触发结果区', searched.value?.viewVisible === true, '')
 
 // ---------- 关闭与重开 ----------
 await ev(`document.getElementById('t-outline-close').click()`)

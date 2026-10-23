@@ -247,14 +247,14 @@ await p.send('Page.reload')
 await sleep(5500)
 
 const compactOn = await p.ev(`({
-  checked: document.getElementById('t-compact').checked,
+  pressed: document.getElementById('t-toggle-compact').getAttribute('aria-pressed'),
   compressedRows: [...document.querySelectorAll('.t-dir .t-name')].filter(e => e.textContent.includes('/')).length,
   samples: [...document.querySelectorAll('.t-dir .t-name-compressed')].slice(0, 5).map(e => ({
     shown: e.textContent,
     title: e.getAttribute('title'),
   })),
 })`)
-check('默认开启合并目录', compactOn.value?.checked === true, '')
+check('默认开启合并目录', compactOn.value?.pressed === 'true', '')
 check('出现合并的目录行', compactOn.value?.compressedRows > 0, `${compactOn.value?.compressedRows} 行`)
 check('合并行有完整路径提示',
   (compactOn.value?.samples || []).every((s) => s.title && s.title.includes('/')),
@@ -330,7 +330,7 @@ check('长链 title 是完整路径',
   deepChain.value?.sample?.title?.slice(-46))
 
 // 关闭合并 → 恢复逐层
-await p.ev(`(() => { const c=document.getElementById('t-compact'); c.checked=false; c.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+await p.ev(`document.getElementById('t-toggle-compact').click()`)
 await sleep(1000)
 const compactOff = await p.ev(`({
   compressedRows: document.querySelectorAll('.t-name-compressed').length,
@@ -341,7 +341,7 @@ check('关闭合并后没有合并行', compactOff.value?.compressedRows === 0, 
 check('开关状态被记住', compactOff.value?.stored === '0', compactOff.value?.stored)
 
 // 重新开启
-await p.ev(`(() => { const c=document.getElementById('t-compact'); c.checked=true; c.dispatchEvent(new Event('change',{bubbles:true})) })()`)
+await p.ev(`document.getElementById('t-toggle-compact').click()`)
 await sleep(900)
 const compactBack = await p.ev(`document.querySelectorAll('.t-name-compressed').length`)
 check('重新开启后合并行恢复', compactBack.value > 0, `${compactBack.value} 行`)
