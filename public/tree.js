@@ -7,6 +7,7 @@ import { fuzzyScore } from '/fuzzy.js'
 import { buildTree, countFiles, displayChainName } from '/tree-model.js'
 import { initSplitter } from '/splitter.js'
 import { detectLang, highlightLines } from '/highlight.js'
+import { createOutline } from '/outline.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -47,6 +48,15 @@ const state = {
   grepQuery: '',       // 上一次实际执行的查询（用于丢弃过期响应）
   scopePath: '',       // 「限当前目录」用的目录
   jumpLine: null,      // 打开文件后要跳到的行号（来自搜索命中）
+  // ---- 符号大纲 ----
+  outlineVisible: (() => {
+    try {
+      const v = localStorage.getItem('wsl-worktree.outlineVisible')
+      return v === null ? true : v === '1'
+    } catch { return true }
+  })(),
+  lineEls: null,       // 当前文件所有行的 tr，用于滚动联动
+  lineTops: null,      // 上述行的 offsetTop，二分查找当前行
 }
 
 // ---------- 工具 ----------
@@ -252,6 +262,91 @@ function fileRow(path, name, title, depth = 0, size = null, showDir = false) {
  * @param {{jumpLine?: number|null}} [opts]
  *        jumpLine：打开后滚到该行并高亮（内容搜索点命中行时用）
  */
+// ============================================================
+// 右侧符号大纲
+// ============================================================
+
+/** 缓存行元素与位置：滚动联动要二分查找「当前在第几行」 */
+function cacheLineEls() {
+  const rows = [...$('t-file-body').querySelectorAll('tr[data-line]')]
+  state.lineEls = rows
+  // offsetTop 在同一个 offsetParent 下才可比；这里都挂在同一个表里，够用
+  state.lineTops = rows.map((el) => el.offsetTop)
+}
+
+/** 跳到某一行并闪一下，让人看清落点 */
+function jumpToLine(line) {
+  const body = $('t-file-body')
+  const row = body.querySelector(`tr[data-line="${line}"]`)
+  if (!row) return
+  row.scrollIntoView({ block: 'center' })
+  // 取消上一次的定时器：连续点同一行时，前一个 setTimeout 会把刚加上的
+  // class 提前摘掉，闪烁看起来时有时无
+  if (row._flashTimer) clearTimeout(row._flashTimer)
+  row.classList.remove('o-jump-flash')
+  void row.offsetWidth // 强制回流，否则动画不会重放
+  row.classList.add('o-jump-flash')
+  row._flashTimer = setTimeout(() => {
+    row.classList.remove('o-jump-flash')
+    row._flashTimer = null
+  }, 1400)
+}
+
+/** 大纲底部按钮：把这个符号名交给左侧的内容搜索（等价于在那儿手输） */
+function searchInAllFiles(name) {
+  if (!name) return
+  setMode('content')
+  $('t-filter').value = name
+  runGrep(name)
+}
+
+const outline = createOutline({
+  containerEl: $('t-outline'),
+  listEl: $('t-outline-list'),
+  countEl: $('t-outline-count'),
+  filterEl: $('t-outline-filter'),
+  footEl: $('t-outline-foot'),
+  jumpToLine,
+  onSearchAll: searchInAllFiles,
+})
+
+function setOutlineVisible(v) {
+  state.outlineVisible = v
+  $('t-outline').hidden = !v
+  try { localStorage.setItem('wsl-worktree.outlineVisible', v ? '1' : '0') } catch {}
+  // 打开时按当前滚动位置对齐一次，避免高亮还停在旧位置
+  if (v) syncOutlineToScroll()
+}
+
+/** 把源码滚动位置换算成「当前符号」，交给大纲高亮 */
+function syncOutlineToScroll() {
+  if ($('t-outline').hidden) return
+  const tops = state.lineTops
+  if (!tops || !tops.length) return
+  const y = $('t-file-body').scrollTop + 10
+  // 二分找最后一个 offsetTop <= y 的行
+  let lo = 0
+  let hi = tops.length - 1
+  let ans = 0
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (tops[mid] <= y) { ans = mid; lo = mid + 1 } else { hi = mid - 1 }
+  }
+  outline.syncToLine(ans + 1)
+}
+
+let outlineRaf = 0
+$('t-file-body').addEventListener('scroll', () => {
+  if (outlineRaf || $('t-outline').hidden) return
+  outlineRaf = requestAnimationFrame(() => {
+    outlineRaf = 0
+    syncOutlineToScroll()
+  })
+}, { passive: true })
+
+$('t-btn-outline').addEventListener('click', () => setOutlineVisible($('t-outline').hidden))
+$('t-outline-close').addEventListener('click', () => setOutlineVisible(false))
+
 async function selectFile(path, opts = {}) {
   state.selected = path
   state.jumpLine = opts.jumpLine ?? null
@@ -283,15 +378,24 @@ async function selectFile(path, opts = {}) {
     if (data.binary) {
       $('t-file-meta').textContent = `二进制 · ${fmtSize(data.size)}`
       body.innerHTML = `<div class="t-empty" style="padding:24px 16px">二进制文件（${esc(fmtSize(data.size))}），不显示内容。</div>`
+      outline.clear()
+      state.lineEls = null
+      state.lineTops = null
       return
     }
     if (data.tooLarge) {
       $('t-file-meta').textContent = `过大 · ${fmtSize(data.size)}`
       body.innerHTML = `<div class="t-empty" style="padding:24px 16px">文件过大（${esc(fmtSize(data.size))}，上限 ${esc(fmtSize(data.maxBytes))}），不在浏览器内展示。</div>`
+      outline.clear()
+      state.lineEls = null
+      state.lineTops = null
       return
     }
     if (data.content == null) {
       body.innerHTML = `<div class="t-empty" style="padding:24px 16px;color:var(--red)">${esc(data.error || '读取失败')}</div>`
+      outline.clear()
+      state.lineEls = null
+      state.lineTops = null
       return
     }
 
@@ -303,6 +407,9 @@ async function selectFile(path, opts = {}) {
     state.lastContent = data.content
     const jump = opts.jumpLine
     body.replaceChildren(renderCode(data.content, path, jump))
+    // 大纲要在 DOM 落地后再算：行元素位置得等布局完成
+    outline.render(path, data.content, lang)
+    cacheLineEls()
     if (jump) {
       // 滚动到命中行并居中，让上下文可见
       const row = body.querySelector(`tr[data-line="${jump}"]`)
@@ -311,6 +418,8 @@ async function selectFile(path, opts = {}) {
     } else {
       body.scrollTop = 0
     }
+    // 滚动位置定下来后再对齐一次大纲高亮
+    syncOutlineToScroll()
     if (data.truncated) {
       const t = document.createElement('div')
       t.className = 't-empty'
@@ -730,6 +839,9 @@ $('t-hl').addEventListener('change', (e) => {
   const keepScroll = body.scrollTop
   body.replaceChildren(renderCode(state.lastContent, state.selected))
   body.scrollTop = keepScroll
+  // 行元素重建了，大纲的行缓存和滚动联动都要跟着刷新
+  cacheLineEls()
+  syncOutlineToScroll()
 })
 
 $('t-btn-copy-path').addEventListener('click', async () => {
@@ -799,6 +911,8 @@ async function init() {
   $('t-wt').textContent = wtPath ? wtPath.split('/').filter(Boolean).slice(-1)[0] : ''
   $('t-compact').checked = state.compact
   $('t-hl').checked = state.highlight
+  // 大纲默认展开（记住上次的选择）
+  setOutlineVisible(state.outlineVisible)
   $('t-wt').title = wtPath || ''
   $('t-commit').textContent = sha === 'HEAD' ? 'HEAD' : sha.slice(0, 7)
 

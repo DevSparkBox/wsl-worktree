@@ -87,6 +87,7 @@
         <input type="checkbox" id="t-hl" checked>
         <span>高亮</span>
       </label>
+      <button class="t-btn" id="t-btn-outline" title="显示 / 隐藏符号大纲">大纲</button>
       <button class="t-btn" id="t-btn-history" title="在新标签页查看该文件的提交历史" hidden>
         <svg width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true">
           <circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>
@@ -96,8 +97,31 @@
       </button>
       <button class="t-btn" id="t-btn-copy-path" title="复制完整路径" hidden>复制路径</button>
     </div>
-    <div class="t-file-body" id="t-file-body">
-      <div class="t-empty" style="padding:24px 16px">在左侧选择一个文件查看内容。</div>
+    <div class="t-file-main">
+      <div class="t-file-body" id="t-file-body">
+        <div class="t-empty" style="padding:24px 16px">在左侧选择一个文件查看内容。</div>
+      </div>
+
+      <!-- 右侧符号大纲：只列类型和函数，树形展示嵌套 -->
+      <aside class="t-outline" id="t-outline" hidden>
+        <div class="t-outline-head">
+          <span class="t-outline-title">Symbols</span>
+          <span class="t-outline-count" id="t-outline-count"></span>
+          <div class="spacer"></div>
+          <button class="t-icon-btn" id="t-outline-close" title="隐藏大纲" aria-label="隐藏大纲">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+              <path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+        <div class="t-outline-search">
+          <input id="t-outline-filter" placeholder="过滤符号…" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="t-outline-list" id="t-outline-list" role="tree"></div>
+        <div class="t-outline-foot" id="t-outline-foot" hidden></div>
+      </aside>
+    </div>
+  </section>
     </div>
   </section>
 </main>

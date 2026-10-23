@@ -86,7 +86,12 @@ const p = await connect(targets.find((t) => t.type === 'page'))
 await p.send('Page.enable'); await p.send('Runtime.enable')
 await p.send('Emulation.setDeviceMetricsOverride', { width: 1600, height: 950, deviceScaleFactor: 1, mobile: false })
 await p.send('Page.navigate', { url: `http://localhost:7801/tree.html?repo=${ID}&sha=HEAD&wt=${encodeURIComponent(REPO)}` })
-await sleep(5500)
+// 轮询等首个文件渲染完：右侧大纲面板会让初始化略慢，固定 sleep 容易掐在加载中
+for (let i = 0; i < 40; i++) {
+  await sleep(500)
+  const r = await p.ev(`document.querySelectorAll('.t-code tr').length`)
+  if ((r.value || 0) > 0) break
+}
 
 const layout = await p.ev(`({
   dirs: document.querySelectorAll('.t-dir').length,

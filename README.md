@@ -6,6 +6,91 @@
 
 ---
 
+## 符号大纲
+
+文件树页右侧的 Symbols 面板：列出当前文件的**类型和函数**，点一下跳到定义行。
+
+```
+┌─ Symbols  150 ──────────── ✕ ┐
+│ [过滤符号…              ⌘R] │
+│ T MetadataAjaxDesignerApp…  │
+│   ƒ validationFormulaType   │
+│   ƒ getFunctionPageMetadata │
+│ ▾ ƒ constructControlFields  │   ← 函数里嵌函数时逐层缩进
+│     ƒ innerHelper           │
+└─ 在所有文件中搜索「xxx」─────┘
+```
+
+**操作**
+
+| 动作 | 行为 |
+|---|---|
+| 点符号名 | 代码区滚到该行并闪烁一下，同时展开「本文件引用」 |
+| 点引用行 | 跳到那一行 |
+| 点折叠箭头 | 折叠/展开子树（默认全展开） |
+| 滚动代码 | 大纲自动高亮当前所在符号 |
+| 过滤框 | 在全部符号里按名字过滤（170 个符号时必需） |
+| 底部按钮 | 把符号名交给左侧「内容」搜索，等价于在那儿手输 |
+| 顶栏「大纲」/ ✕ | 显示或隐藏面板（记住选择） |
+
+### 提取范围：只到类型和函数
+
+不收字段、常量、普通变量——一个 Service 类可能有 20 个字段混在 60 个方法里，收进来反而更难找东西。
+
+C# 属性例外，显示为 `prop`（在 C# 里属性就是成员的常规写法，与 Java 的 getter/setter 地位相当）。
+
+| 语言 | 类型节点 | 函数节点 |
+|---|---|---|
+| Java | class / interface / enum / record / @interface | 方法、构造器 |
+| C# | class / interface / struct / enum / record / delegate | 方法、构造器、局部函数、属性（prop） |
+| TS / TSX / JS / JSX | class / interface / type / enum | function、箭头函数常量、类方法 |
+| Vue | script 块内同上 | 同上（不含 template 里的组件引用） |
+| Python | class | def（含 async） |
+| Go | type（struct/interface） | func（带 receiver 的挂到对应 type 下） |
+
+### 层级怎么来的
+
+靠**缩进**建树，不用大括号配对——方法体里的 `{` 会把深度算乱：
+
+```
+维护祖先栈，遇到 indent 不比栈顶深的就弹栈
+```
+
+Java 实测 7302 行 → 150 个节点（1 个类 + 149 个方法），2 层；TS 里函数套函数能到 3–4 层。
+
+Go 是例外：函数缩进都是 0，靠 `func (b *Builder) Build()` 的 receiver 挂到同名 `type Builder` 下。
+
+### 两层引用（这也是难点所在）
+
+| 范围 | 做法 | 精度 |
+|---|---|---|
+| **本文件** | `\bname\b` 正则扫描，列出所有行 | 文本级，注释/字符串里的同名也算 |
+| **跨文件** | 底部按钮 → 左侧内容搜索（git grep） | 复用现有搜索，作用于当前提交快照 |
+
+之所以不自己实现跨文件引用：语义级准确引用需要 LSP 或索引，成本完全不是一个量级。文本级近似误报多，反而干扰判断——不如交给用户已经熟悉的搜索。
+
+### 这是启发式，不是编译器
+
+| 能提到 | 提不到 |
+|---|---|
+| `public void foo() {` | 方法签名跨多行 |
+| `public void foo();`（接口方法） | Lombok / 宏 / 源生成器产生的方法（源码里没有） |
+| `@Override public int x() {`（注解同行） | 匿名内部类、Lambda 里的东西（本来也不算符号） |
+| `int Foo() => 1;`（C# 表达式体方法） | 写错缩进的代码（层级会乱） |
+| 泛型 / 数组 / throws 的返回类型 | |
+
+拿到 90–95% 就够导航用。真需要 100% 准确得引入 tree-sitter 或常驻 language server，那会破坏本项目零依赖零构建的前提。
+
+### 性能
+
+| 场景 | 数据 |
+|---|---|
+| 单文件提取 | < 5ms（内容已在内存，不用请求后端） |
+| 7302 行 / 150 符号 渲染 + 高亮 + 大纲 | 约 1.4s（主要是代码高亮，大纲只占几十 ms） |
+| 滚动联动 | requestAnimationFrame 节流 + 二分查行 |
+
+---
+
 ## 提交对比
 
 选两个提交（sha / tag / 分支名都行），看两者之间的代码差异。**左侧树只列出有变更的文件**——这是它与文件树页的根本区别：数据源是 `git diff`，不是 `ls-tree` 的全量清单。
@@ -269,6 +354,7 @@ if (e.target.closest('a.ext-link')) return
 | 合并单链目录 | 文件树默认把 com/mysoft/jmpt 这类单链压成一行，可开关 |
 | 发布标签 | 文件树顶栏显示指向该提交的 tag（轻量/annotated 样式区分） |
 | **提交对比** | 选两个提交，左侧树只列出有变更的文件，右侧看单文件 diff |
+| **符号大纲** | 文件树页右侧列出当前文件的类型与函数，树形嵌套、点击跳转、滚动联动 |
 | 内容搜索 | 文件树里可切换「路径/内容」模式，在提交快照里 grep 并跳转到命中行 |
 | 语法高亮 | 文件内容按语言上色（TS/JS/Java/Vue/LESS/MD/SQL/XML 等），可开关 |
 | 切换查看的文件 | 历史页顶栏点击文件路径 → 输入框 → 路径模糊搜索前 20 条 |
@@ -1076,6 +1162,8 @@ E:\ai-spaces\tools\wsl-worktree\
     ├── history.html        单文件历史页（独立标签页）
     ├── history.css         历史页样式（双栏）
     ├── history.js          历史页逻辑
+    ├── symbols.js          从源码提取符号（类型/函数）+ 缩进建树（纯逻辑，可单测）
+    ├── outline.js          右侧大纲面板：渲染、跳转、引用、滚动联动
     ├── patch-view.js       unified patch → 带行号表格（历史页 / 对比页共用）
     ├── splitter.js         左右分栏拖动（文件树页 / 对比页共用）
     ├── compare.html        提交对比页
@@ -1083,7 +1171,7 @@ E:\ai-spaces\tools\wsl-worktree\
     └── compare.js          对比页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-symbols.mjs`、`test-ui-outline.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
 
 **源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
 改完源码执行：
@@ -1376,6 +1464,12 @@ node test-ui-tags.mjs
 
 # UI：更新分支对话框按钮退场（20 项）
 node test-ui-pull-dialog.mjs
+
+# 符号提取与建树（纯逻辑，48 项）
+node test-symbols.mjs
+
+# UI：文件树页的符号大纲（19 项）
+node test-ui-outline.mjs
 
 # UI：提交对比页（61 项，含接口与页面）
 node test-ui-compare.mjs

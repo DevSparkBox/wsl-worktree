@@ -298,11 +298,19 @@
 .t-btn:hover { background: var(--bg-hover); color: var(--text); }
 .t-btn[hidden] { display: none; }
 
+.t-file-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+}
 .t-file-body {
   flex: 1;
   overflow: auto;
   min-height: 0;
+  min-width: 0;
 }
+
 
 /* 代码表：行号 + 内容 */
 .t-code-wrap { min-width: 100%; }
@@ -620,3 +628,199 @@
   box-shadow: none;
   cursor: default;
 }
+
+/* ============================================================
+   符号大纲（右侧面板）
+   只列类型和函数，缩进表达嵌套层级
+   ============================================================ */
+.t-outline {
+  flex: none;
+  width: 260px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-left: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+.t-outline[hidden] { display: none; }
+
+.t-outline-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.t-outline-title {
+  font: 500 11.5px var(--sans);
+  color: var(--text);
+  letter-spacing: .2px;
+}
+.t-outline-count {
+  font: 10px var(--mono);
+  color: var(--text-faint);
+}
+.t-outline-head .t-icon-btn { width: 20px; height: 20px; }
+
+.t-outline-search {
+  flex: none;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+#t-outline-filter {
+  width: 100%;
+  box-sizing: border-box;
+  font: 11.5px var(--sans);
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--text);
+  outline: none;
+}
+#t-outline-filter:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+.t-outline-list {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+  padding: 3px 0 8px;
+}
+
+/* 一行一个符号；缩进靠 inline padding-left 控制 */
+.o-node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 0;
+  cursor: pointer;
+  font: 11.5px var(--sans);
+  color: var(--text);
+  white-space: nowrap;
+  border-left: 2px solid transparent;
+}
+.o-node:hover { background: var(--bg-hover); }
+/* 当前滚动位置所在的符号 */
+.o-node.active {
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+}
+.o-node.active .o-name { color: var(--accent); font-weight: 500; }
+
+.o-caret {
+  flex: none;
+  width: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-faint);
+}
+.o-caret-empty { visibility: hidden; }
+
+/* 类型用方框、函数用 ƒ，颜色区分（同 GitHub 的直觉） */
+.o-icon {
+  flex: none;
+  width: 13px;
+  text-align: center;
+  font: 600 9.5px var(--mono);
+  line-height: 1;
+}
+.o-icon-type { color: var(--purple); }
+.o-icon-fn { color: var(--accent); }
+.o-icon-prop { color: var(--amber); }
+
+.o-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+  font-size: 11px;
+}
+/* 返回类型不做独立列：260px 面板里它和名字抢宽度，两边都截断反而都读不懂。
+   改为只在 title 里给出。 */
+.o-refs-badge {
+  flex: none;
+  font: 9px var(--mono);
+  color: var(--text-faint);
+  background: var(--bg-alt);
+  border-radius: 8px;
+  padding: 0 5px;
+  line-height: 14px;
+}
+
+/* 展开的「本文件引用」块 */
+.o-refs {
+  padding: 2px 0 4px 0;
+  background: var(--bg-alt);
+  border-left: 2px solid var(--border-strong);
+  margin-left: 2px;
+}
+.o-ref {
+  display: flex;
+  gap: 6px;
+  padding: 1px 8px 1px 0;
+  cursor: pointer;
+  font: 10.5px var(--mono);
+  color: var(--text-dim);
+}
+.o-ref:hover { background: var(--bg-hover); color: var(--text); }
+.o-ref-line {
+  flex: none;
+  width: 34px;
+  text-align: right;
+  color: var(--text-faint);
+}
+.o-ref-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+}
+.o-ref-def .o-ref-text { color: var(--text); }
+.o-ref-more {
+  padding: 2px 8px 2px 42px;
+  font: 10px var(--sans);
+  color: var(--text-faint);
+}
+
+/* 底部：跨文件搜索 + 空状态 */
+.t-outline-foot {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+  background: var(--bg-alt);
+}
+.t-outline-foot[hidden] { display: none; }
+.o-search-all {
+  width: 100%;
+  box-sizing: border-box;
+  font: 11px var(--sans);
+  padding: 5px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--bg-panel);
+  color: var(--text-dim);
+  cursor: pointer;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.o-search-all:hover { border-color: var(--accent); color: var(--accent); }
+
+.o-empty {
+  padding: 14px 12px;
+  font: 11.5px var(--sans);
+  color: var(--text-faint);
+  line-height: 1.7;
+}
+
+/* 跳转时闪一下，让人看清落点 */
+@keyframes o-flash {
+  0% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
+.o-jump-flash { animation: o-flash 1.2s ease-out; }
