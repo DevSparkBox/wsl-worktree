@@ -701,6 +701,9 @@
   border-left: 2px solid transparent;
 }
 .o-node:hover { background: var(--bg-hover); }
+/* 搜索时的祖先节点：只用来表达「命中项在哪个类下面」，淡掉不抢注意力 */
+.o-node.o-dim { opacity: .5; }
+.o-node.o-dim:hover { opacity: 1; }
 /* 当前滚动位置所在的符号 */
 .o-node.active {
   background: var(--accent-soft);
@@ -730,6 +733,12 @@
 .o-icon-fn { color: var(--accent); }
 .o-icon-prop { color: var(--amber); }
 
+.o-name mark {
+  background: var(--amber-soft);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
 .o-name {
   flex: 1;
   min-width: 0;

@@ -89,65 +89,82 @@ export function createOutline(opts) {
   }
 
   /**
-   * 渲染列表。filter 非空时改成**扁平命中列表**（带 ancestor 前缀），
-   * 否则按树的展开状态递归。
+   * 渲染列表。
+   *
+   * 搜索时**仍然保持树形**：保留命中节点和它们的祖先，祖先淡色显示作路径上下文。
+   * 早先是拍平成「父名.子名」的一行，结果是 260px 里名字被截成
+   * `OrganizationDomainService.6...`——既看不出层级也看不出方法名。
    */
   function renderList() {
     listEl.replaceChildren()
     if (!state.root) return
+    state.flat = []
+    const frag = document.createDocumentFragment()
 
     if (state.filter) {
       const kw = state.filter.toLowerCase()
-      const hits = []
-      const walk = (node, trail) => {
-        for (const c of node.children) {
-          const nextTrail = [...trail, c.name]
-          if (c.name.toLowerCase().includes(kw)) hits.push({ node: c, trail })
-          walk(c, nextTrail)
-        }
-      }
-      walk(state.root, [])
-      if (!hits.length) { showEmpty('没有匹配的符号。'); return }
-      state.flat = hits.map((h) => h.node)
-      const frag = document.createDocumentFragment()
-      for (const h of hits) frag.appendChild(nodeRow(h.node, 0, false, h.trail))
-      listEl.appendChild(frag)
-      return
+      const kids = filterTree(state.root, kw)
+      if (!kids.length) { showEmpty('没有匹配的符号。'); return }
+      // 搜索结果全展开：用户要看的是「命中的都在哪几层」，不是折叠状态
+      renderNodes({ children: kids }, 0, frag, kw)
+    } else {
+      renderNodes(state.root, 0, frag, null)
     }
-
-    state.flat = []
-    const frag = document.createDocumentFragment()
-    const walk = (node, depth) => {
-      for (const c of node.children) {
-        state.flat.push(c)
-        const key = keyOf(c)
-        const isCollapsed = state.collapsed.has(key)
-        frag.appendChild(nodeRow(c, depth, isCollapsed))
-        if (state.expandedRefs.has(key)) frag.appendChild(refsBlock(c))
-        if (c.children.length && !isCollapsed) walk(c, depth + 1)
-      }
-    }
-    walk(state.root, 0)
     listEl.appendChild(frag)
     paintActive()
   }
 
-  function nodeRow(sym, depth, isCollapsed, trail) {
+  /**
+   * 按关键词过滤一棵子树，保留命中节点与它们的祖先。
+   * 返回新数组（不破坏原树），命中节点带 _matched 标记供渲染区分。
+   */
+  function filterTree(node, kw) {
+    const out = []
+    for (const c of node.children) {
+      const sub = filterTree(c, kw)
+      const matched = c.name.toLowerCase().includes(kw)
+      if (matched || sub.length) {
+        out.push({ ...c, children: sub, _matched: matched })
+      }
+    }
+    return out
+  }
+
+  /**
+   * @param {string|null} kw 非 null 表示处于搜索态：忽略折叠、祖先淡色
+   */
+  function renderNodes(node, depth, frag, kw) {
+    for (const c of node.children) {
+      state.flat.push(c)
+      const key = keyOf(c)
+      // 搜索态强制全展开，避免命中项藏在折叠的父节点里看不到
+      const isCollapsed = kw ? false : state.collapsed.has(key)
+      const dim = Boolean(kw) && c._matched === false
+      frag.appendChild(nodeRow(c, depth, isCollapsed, dim, kw))
+      if (state.expandedRefs.has(key)) frag.appendChild(refsBlock(c))
+      if (c.children.length && !isCollapsed) renderNodes(c, depth + 1, frag, kw)
+    }
+  }
+
+  function nodeRow(sym, depth, isCollapsed, dim, kw) {
     const el = document.createElement('div')
     const key = keyOf(sym)
-    el.className = 'o-node' + (state.activeKey === key ? ' active' : '')
+    el.className = 'o-node'
+      + (state.activeKey === key ? ' active' : '')
+      + (dim ? ' o-dim' : '')
     el.dataset.key = key
     el.dataset.line = String(sym.line)
     el.style.paddingLeft = `${6 + depth * 12}px`
     el.setAttribute('role', 'treeitem')
 
     const isType = TYPE_KINDS.has(sym.kind)
-    const caret = sym.children?.length
+    // 搜索态全部强制展开，折叠箭头点了不会有反应——干脆不显示，免得误导
+    const showCaret = !kw && sym.children?.length
+    const caret = showCaret
       ? `<span class="o-caret" data-act="toggle" title="${isCollapsed ? '展开' : '折叠'}">${isCollapsed ? CARET_CLOSED : CARET_OPEN}</span>`
       : '<span class="o-caret o-caret-empty"></span>'
     const icon = isType ? 'T' : sym.kind === 'prop' ? 'P' : 'ƒ'
     const iconCls = isType ? 'o-icon-type' : sym.kind === 'prop' ? 'o-icon-prop' : 'o-icon-fn'
-    const trailText = trail && trail.length ? `${trail[trail.length - 1]}.` : ''
     // 引用数：只在选中过（缓存过）之后才显示，避免一上来给 200 行文件全算一遍
     const refs = state.expandedRefs.has(key) ? findReferences(state.content, sym.name, { defLine: sym.line }) : null
     const badge = refs && refs.length
@@ -157,8 +174,7 @@ export function createOutline(opts) {
     el.innerHTML =
       caret +
       `<span class="o-icon ${iconCls}">${icon}</span>` +
-      `<span class="o-name" title="${escHtml(sym.name)}${sym.detail ? ` : ${escHtml(sym.detail)}` : ''}">${escHtml(trailText + sym.name)}</span>` +
-
+      `<span class="o-name" title="${escHtml(sym.name)}${sym.detail ? ` : ${escHtml(sym.detail)}` : ''}">${markMatch(sym.name, kw)}</span>` +
       badge
     return el
   }
@@ -303,6 +319,20 @@ const CARET_OPEN =
 const CARET_CLOSED =
   '<svg width="9" height="9" viewBox="0 0 12 12" fill="none" aria-hidden="true">' +
   '<path d="M4.5 2.5L8 6l-3.5 3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+
+/**
+ * 把名字里命中关键词的那一段包成 <mark>。
+ * 先按小写找位置，再对原始字符串切片——避免 toLowerCase 改变长度时错位
+ * （某些字符小写后长度会变，虽然标识符里基本遇不到，稳妥起见）。
+ */
+function markMatch(name, kw) {
+  if (!kw) return escHtml(name)
+  const i = String(name).toLowerCase().indexOf(kw)
+  if (i < 0) return escHtml(name)
+  return escHtml(name.slice(0, i)) +
+    '<mark>' + escHtml(name.slice(i, i + kw.length)) + '</mark>' +
+    escHtml(name.slice(i + kw.length))
+}
 
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) => ({

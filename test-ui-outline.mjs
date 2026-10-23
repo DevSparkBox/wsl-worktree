@@ -169,10 +169,20 @@ await sleep(400)
 const filtered = await ev(`({
   nodes: document.querySelectorAll('#t-outline-list .o-node').length,
   names: [...document.querySelectorAll('#t-outline-list .o-name')].map(e => e.textContent),
+  // 搜索时必须保留树形：祖先节点淡色显示，命中项缩进在其下
+  dim: document.querySelectorAll('.o-node.o-dim').length,
+  deeper: [...document.querySelectorAll('.o-node')].filter(n => parseInt(n.style.paddingLeft, 10) > 6).length,
+  marks: document.querySelectorAll('.o-name mark').length,
+  dimPads: [...document.querySelectorAll('.o-node.o-dim')].map(n => parseInt(n.style.paddingLeft, 10)),
 })`)
 check('过滤后只剩命中的符号',
   filtered.value?.nodes > 0 && filtered.value?.nodes < base.value?.nodes,
   `${base.value?.nodes} → ${filtered.value?.nodes}`)
+check('搜索时保留树形结构（命中项有缩进）', filtered.value?.deeper > 0,
+  `${filtered.value?.deeper} 个缩进节点`)
+check('命中的祖先淡色显示作路径', filtered.value?.dim > 0,
+  `${filtered.value?.dim} 个祖先，缩进 ${JSON.stringify(filtered.value?.dimPads)}`)
+check('命中文字高亮', filtered.value?.marks > 0, `${filtered.value?.marks} 处`)
 await ev(`(() => {
   const i = document.getElementById('t-outline-filter')
   i.value = ''
