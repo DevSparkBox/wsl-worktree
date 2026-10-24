@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = fileURLToPath(new URL('.', import.meta.url))
+const ROOT = join(HERE, '..', '..')
 const CHROME = process.env.CHROME || [
   '/usr/bin/google-chrome-stable',
   '/usr/bin/google-chrome',
@@ -25,7 +26,7 @@ const CDP_PORT = Number(process.env.CDP_PORT || 9237)
 const TMP = mkdtempSync(join(tmpdir(), 'wt-ui-settings-'))
 const CONFIG = join(TMP, 'config.json')
 const REPOS = join(TMP, 'repos')
-const SHOTS = join(HERE, 'shots')
+const SHOTS = join(ROOT, 'shots')
 mkdirSync(REPOS, { recursive: true })
 mkdirSync(SHOTS, { recursive: true })
 
@@ -68,7 +69,7 @@ writeFileSync(CONFIG, JSON.stringify({
 }, null, 2))
 
 const serverLog = join(TMP, 'server.log')
-const server = spawn(process.execPath, [join(HERE, 'server.mjs')], {
+const server = spawn(process.execPath, [join(ROOT, 'server.mjs')], {
   env: { ...process.env, WORKTREE_CONFIG: CONFIG },
   stdio: ['ignore', 'pipe', 'pipe'],
 })

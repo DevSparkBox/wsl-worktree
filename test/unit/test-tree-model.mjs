@@ -1,5 +1,5 @@
 // 目录树构建 + 单链压缩（纯逻辑，不开浏览器）
-import { buildTree, countFiles, displayChainName } from './public/tree-model.js'
+import { buildTree, countFiles, displayChainName } from '../../public/tree-model.js'
 
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(36)} ${d}`) }

@@ -1,6 +1,6 @@
 // 直接验证 public/fuzzy.js 的模糊匹配（快，不用开浏览器）
 // 该模块是主界面和历史页共用的实现，替代了原先从 app.js 抠代码的做法。
-import { fuzzyScore, rankByFuzzy } from './public/fuzzy.js'
+import { fuzzyScore, rankByFuzzy } from '../../public/fuzzy.js'
 
 // 真实分支名（来自用户仓库）
 const branches = [

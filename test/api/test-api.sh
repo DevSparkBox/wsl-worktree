@@ -2,11 +2,12 @@
 # 接口级测试总入口：起一个隔离配置的临时服务，依次跑完所有 API 测试。
 #
 # 不碰 7801 上的生产服务，也不依赖 /tmp 在两个进程之间可见：
-# 临时仓库和服务配置都放在本目录的 .test-run/ 下。
+# 临时仓库和服务配置都放在仓库根目录的 .test-run/ 下（.gitignore 已排除）。
 set -euo pipefail
-SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROOT=$(cd "$HERE/../.." && pwd)
 PORT=${PORT:-7813}
-TMP="$SRC/.test-run"
+TMP="$ROOT/.test-run"
 NODE=${NODE:-node}
 
 rm -rf "$TMP"
@@ -28,7 +29,7 @@ cat > "$TMP/config.json" <<EOF
 }
 EOF
 
-WORKTREE_CONFIG="$TMP/config.json" "$NODE" "$SRC/server.mjs" > "$TMP/server.log" 2>&1 &
+WORKTREE_CONFIG="$TMP/config.json" "$NODE" "$ROOT/server.mjs" > "$TMP/server.log" 2>&1 &
 PID=$!
 cleanup() {
   kill "$PID" 2>/dev/null || true
@@ -66,5 +67,5 @@ echo "PASS  非 JSON 写请求被拒绝                 415"
 for t in test-ops.mjs test-file-history.mjs test-fetch-tag.mjs test-tag-create.mjs test-checkout-tag.mjs test-pending.mjs test-clone.mjs; do
   echo
   echo "===== $t ====="
-  "$NODE" "$SRC/$t"
+  "$NODE" "$HERE/$t"
 done

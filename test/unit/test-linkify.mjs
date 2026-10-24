@@ -1,5 +1,5 @@
 // 提交信息里的 URL 链接化
-import { linkify, extractUrls, escHtml } from './public/linkify.js'
+import { linkify, extractUrls, escHtml } from '../../public/linkify.js'
 
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(36)} ${d}`) }

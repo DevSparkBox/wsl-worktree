@@ -73,7 +73,9 @@ journalctl --user -u wsl-worktree -n 50
 | `public/linkify.js` | commit message URL 转链接（协议白名单 + 转义） |
 | `public/tree-model.js` | 纯逻辑建树 + 单链目录压缩 |
 | `public/highlight.js` | 零依赖语法高亮（sticky 正则 + 兜底扫描） |
-| `test-*.mjs` | 验收测试，接口级 / UI 级 / 纯逻辑级 |
+| `test/unit/` | 纯逻辑测试：`node test/unit/test-*.mjs`，秒级 |
+| `test/api/` | 接口级测试：`test-api.sh` 起 7813 隔离服务，跑完清理 |
+| `test/ui/` | 浏览器 UI 测试；`test-ui-settings.mjs` 可在纯 Linux 跑 |
 | `shots/` | 测试截图产物，gitignored |
 
 ## 改一个功能的标准流程
@@ -81,7 +83,7 @@ journalctl --user -u wsl-worktree -n 50
 1. **逻辑下沉到 `lib/`**：能纯函数化的（解析、建树、打分）单独成模块，方便直接测。
 2. **加路由**：在 `server.mjs` 里加 `mXxx = p.match(...)`。注意：
    - 同一路径可能同时有 GET / POST，**先判 `req.method`**，否则 POST 会被 GET 分支吞掉（历史上真出过“创建成功了但没创建”）。
-   - 所有以 `:id` 为参数的接口先 `dec()`；`id` 是 toplevel 路径的 base64url，不能直接用原始路径。
+   - 所有以 `:id` 为参数的接口必须过 `resolveRepo(id)`（内部 `dec()` + 校验是 git 仓库根），禁止直接用原始路径。
    - 凡是接收 `wt` 参数的，必须过 `resolveWorktree()` 校验，禁止任意路径。
    - 路由要放在 `if (p.startsWith('/api/'))` 的 404 兜底之前。
    - 写操作统一返回 `{ ok, action, reason?, error? }`，成功 200、业务拒绝 409（前端靠 `reason` 出文案），并在成功后清掉 `stateCache` / `scanCache`。
@@ -115,12 +117,12 @@ journalctl --user -u wsl-worktree -n 50
 
 ## 测试
 
-- **纯逻辑**（`test-fuzzy.mjs`、`test-tree-model.mjs`、`test-highlight.mjs`、`test-linkify.mjs`、`test-symbols.mjs`、`test-open.mjs`、`test-config.mjs`）：直接 `node test-*.mjs`，秒级，WSL/Linux 都能跑。
-- **接口级**：`bash test-api.sh`。它会在 `.test-run/` 下生成临时配置和仓库，在 7813 起一个隔离服务，依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone`，结束后清理。不会碰 7801 上的生产服务。
-  - 单独跑某个脚本时：`BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test-ops.mjs`
+- **纯逻辑**（`test/unit/`）：`node test/unit/test-*.mjs`，秒级，WSL/Linux 都能跑。
+- **接口级**：`bash test/api/test-api.sh`。它会在仓库根 `.test-run/` 下生成临时配置和仓库，在 7813 起一个隔离服务，依次跑 `test/api/` 下的 7 个脚本，结束后清理。不会碰 7801 上的生产服务。
+  - 单独跑某个脚本时：`BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test/api/test-ops.mjs`
   - 临时目录用 `WT_TEST_TMP`，不要再写死 `/tmp`；服务和测试进程可能不在同一个 mount namespace。
-- **UI 级**：`node test-ui-settings.mjs` 已可在纯 Linux 跑（系统 Chrome + CDP，自动起隔离服务，验证设置页与平台菜单）。其余 `test-ui-*.mjs` / `test-layout.mjs` 仍假设 Edge + `wsl.exe` + `jm_java`，尚未迁移；改 UI 时优先复用 `test-ui-settings.mjs` 的启动/清理方式，不要在单个脚本里再写死浏览器路径。
-- **`test-log-per-wt.mjs`** 只调 API，但依赖本机真实 `jm_java` 及其 worktree 存在，没有就跳过。
+- **UI 级**：`node test/ui/test-ui-settings.mjs` 已可在纯 Linux 跑（系统 Chrome + CDP，自动起隔离服务，验证设置页与平台菜单）。`test/ui/` 下其余脚本仍假设 Edge + `wsl.exe` + `jm_java`，尚未迁移；改 UI 时优先复用 `test-ui-settings.mjs` 的启动/清理方式，不要在单个脚本里再写死浏览器路径。
+- **`test/api/test-log-per-wt.mjs`** 只调 API，但依赖本机真实 `jm_java` 及其 worktree 存在，没有就跳过。
 
 测试脚本统一约定：
 
@@ -142,7 +144,7 @@ process.exit(fail.length ? 1 : 0)
 - 不要改行尾：全仓库锁 LF（`.gitattributes`）。`install.sh` / `deploy.sh` 变成 CRLF 会在 WSL 里报 `bad interpreter: /usr/bin/env bash^M`。
 - 不要引入 package.json / 依赖 / 构建步骤 / 前端框架，除非有无法回避的理由并同步更新 README。
 - 不要把绝对路径、用户名写进源码（配置走 `config.json`，默认值可用 `~/codes`）。
-- 不要在生产路径上做破坏性手工实验；写操作测试用 `test-api.sh` 或 `.test-run/` 下的临时仓库。
+- 不要在生产路径上做破坏性手工实验；写操作测试用 `test/api/test-api.sh` 或 `.test-run/` 下的临时仓库。
 
 ## 提交风格
 

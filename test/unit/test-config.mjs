@@ -2,7 +2,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { loadConfig, saveApps, getConfigPath } from './lib/config.mjs'
+import { loadConfig, saveApps, getConfigPath } from '../../lib/config.mjs'
 
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(38)} ${d}`) }

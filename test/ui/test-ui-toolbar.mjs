@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const SHOTS = join(HERE, 'shots')
+const SHOTS = join(HERE, '..', '..', 'shots')
 mkdirSync(SHOTS, { recursive: true })
 
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'

@@ -735,7 +735,7 @@ backend                                            backend/src
 `aliases` 记下所有被折叠掉的中间层路径。`revealPath`（定位初始文件）必须沿真实树走、
 用 `d.path` 判断目标是否在目录下，不能按路径前缀递推——压缩后层级和路径不再一一对应。
 
-树构建逻辑抽到 `public/tree-model.js`（纯函数），由 `test-tree-model.mjs` 直接单测。
+树构建逻辑抽到 `public/tree-model.js`（纯函数），由 `test/unit/test-tree-model.mjs` 直接单测。
 
 ### 三个验证过的点
 
@@ -1132,7 +1132,7 @@ git -C /home/wangy/codes/jm_java-worktrees/xxx log HEAD
 
 ### 验证结果
 
-`test-log-per-wt.mjs`（接口级）实测 jm_java 的 4 个 worktree：
+`test/api/test-log-per-wt.mjs`（接口级）实测 jm_java 的 4 个 worktree：
 
 ```
 [主] tmp/v5.5.10.55-...        log首条=f262fa06  worktree.head=f262fa06  PASS
@@ -1189,7 +1189,7 @@ wsl-worktree/
 │   ├── clone.mjs           克隆任务（长任务走 job + 轮询，解析 git 进度）
 │   ├── changes.mjs         某个 worktree 的未提交改动（diff HEAD + 未跟踪）
 │   └── logfmt.mjs          commit log 的输出格式与解析（多处共用）
-└── public/
+├── public/
     ├── index.html          单页骨架
     ├── style.css           浅色主题
     ├── app.js              全部交互逻辑 + 对话框，零框架
@@ -1208,9 +1208,13 @@ wsl-worktree/
     ├── compare.html        提交对比页
     ├── compare.css         对比页样式
     └── compare.js          对比页逻辑
+└── test/
+    ├── unit/               纯逻辑测试（不打服务、不开浏览器）
+    ├── api/                接口级测试；test-api.sh 是总入口
+    └── ui/                 浏览器 UI 测试（CDP）
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-pending.mjs`、`test-clone.mjs`、`test-symbols.mjs`、`test-open.mjs`、`test-config.mjs`、`test-api.sh`、`test-ui-settings.mjs`、`test-ui-outline.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
+测试脚本按类型放在 `test/` 下，跑法见文末「测试」。
 
 ### 部署：直接跑源码（模型 A）
 
@@ -1505,29 +1509,29 @@ journalctl --user -u wsl-worktree -n 50 # 日志
 
 ```bash
 # 纯逻辑（秒级，WSL / Linux 都能跑）
-node test-fuzzy.mjs
-node test-tree-model.mjs
-node test-highlight.mjs
-node test-linkify.mjs
-node test-symbols.mjs
-node test-open.mjs
-node test-config.mjs
+node test/unit/test-fuzzy.mjs
+node test/unit/test-tree-model.mjs
+node test/unit/test-highlight.mjs
+node test/unit/test-linkify.mjs
+node test/unit/test-symbols.mjs
+node test/unit/test-open.mjs
+node test/unit/test-config.mjs
 
 # 接口级：自带隔离服务（7813）+ 临时仓库，跑完自动清理
-bash test-api.sh
+bash test/api/test-api.sh
 
-# 只跑某一组接口测试（先按 test-api.sh 的方式起服务）
-BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test-ops.mjs
+# 只跑某一组接口测试（先按 test-api.sh 的方式起服务，临时目录仍在仓库根的 .test-run）
+BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test/api/test-ops.mjs
 
 # Linux UI 冒烟：设置页保存 + 主界面菜单（系统 Chrome，零依赖）
-node test-ui-settings.mjs
+node test/ui/test-ui-settings.mjs
 ```
 
-- `test-open.mjs`：`lib/open.mjs` 的纯函数测试，覆盖 Linux 原生路径、WSL UNC、`code.cmd`、`wt.exe` 特殊参数、`{path}` 替换、非法路径样式。
-- `test-api.sh`：依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone`。临时目录用 `WT_TEST_TMP` 指定，不写死 `/tmp`（服务和测试进程可能不在同一个 mount namespace）。
-- `test-log-per-wt.mjs` 只调 API，但依赖本机真实 `jm_java` 仓库和 worktree；没有就跳过。
-- `test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页三类工具、保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
-- **其余 UI 脚本（`test-ui-*.mjs`、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、`test-ui-settings.mjs` 和手工页面验证为准。
+- `test/unit/test-open.mjs`：`lib/open.mjs` 的纯函数测试，覆盖 Linux 原生路径、WSL UNC、`code.cmd`、`wt.exe` 特殊参数、`{path}` 替换、非法路径样式。
+- `test/api/test-api.sh`：依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone`。临时目录用 `WT_TEST_TMP` 指定（默认在仓库根 `.test-run/`），不写死 `/tmp`（服务和测试进程可能不在同一个 mount namespace）。
+- `test/api/test-log-per-wt.mjs` 只调 API，但依赖本机真实 `jm_java` 仓库和 worktree；没有就跳过。
+- `test/ui/test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页三类工具、保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
+- **`test/ui/` 下其余脚本（`test-ui-*.mjs`、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、`test/ui/test-ui-settings.mjs` 和手工页面验证为准。
 - UI 脚本结束前断言 `window.__errs` 为空；布局类测试用 `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` 发真实事件。
 
 ## 下一步

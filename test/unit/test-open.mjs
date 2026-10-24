@@ -7,7 +7,7 @@ import {
   buildLaunch,
   toUnc,
   platformInfo,
-} from './lib/open.mjs'
+} from '../../lib/open.mjs'
 
 const checks = []
 const check = (name, ok, detail = '') => {

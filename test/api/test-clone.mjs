@@ -1,7 +1,7 @@
 // 克隆仓库：进度解析 + 接口 + 端到端
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdirSync, rmSync } from 'node:fs'
-import { parseProgressLine, splitProgressChunk } from './lib/clone.mjs'
+import { parseProgressLine, splitProgressChunk } from '../../lib/clone.mjs'
 
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(40)} ${d}`) }

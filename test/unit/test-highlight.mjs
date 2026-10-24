@@ -1,5 +1,5 @@
 // 语法高亮：语言识别 / token 分类 / 转义安全 / 性能
-import { detectLang, highlightLine, highlightLines, createState } from './public/highlight.js'
+import { detectLang, highlightLine, highlightLines, createState } from '../../public/highlight.js'
 
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(34)} ${d}`) }

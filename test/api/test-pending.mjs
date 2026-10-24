@@ -1,8 +1,8 @@
 // 未提交更改的三个数据源（必须在 WSL 里跑：用 /tmp 造临时仓库）
 import { execFileSync } from 'node:child_process'
 import { rmSync } from 'node:fs'
-import { getWorktreeChanges } from './lib/changes.mjs'
-import { listWorktreeFiles, readWorktreeFile } from './lib/tree.mjs'
+import { getWorktreeChanges } from '../../lib/changes.mjs'
+import { listWorktreeFiles, readWorktreeFile } from '../../lib/tree.mjs'
 
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(40)} ${d}`) }

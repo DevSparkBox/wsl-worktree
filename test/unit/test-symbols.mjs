@@ -1,5 +1,5 @@
 // 符号提取（大纲面板的纯逻辑部分）
-import { extractSymbols, buildSymbolTree, findReferences, supportsOutline, escapeRe } from './public/symbols.js'
+import { extractSymbols, buildSymbolTree, findReferences, supportsOutline, escapeRe } from '../../public/symbols.js'
 
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(42)} ${d}`) }
