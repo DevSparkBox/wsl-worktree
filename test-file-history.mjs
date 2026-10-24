@@ -1,8 +1,9 @@
 // 单文件历史接口：改名跟踪 / 当时路径 / 中文路径 / 统计
 import { execFileSync } from 'node:child_process'
 
-const ROOT = '/tmp/wt-filehist'
-const BASE = 'http://127.0.0.1:7801'
+const TMPBASE = process.env.WT_TEST_TMP || '/tmp'
+const ROOT = `${TMPBASE}/wt-filehist`
+const BASE = process.env.BASE || 'http://127.0.0.1:7801'
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 const sh = (cwd, a) => execFileSync('git', a, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim()
 const enc = (s) => Buffer.from(s, 'utf8').toString('base64url')

@@ -1,5 +1,5 @@
 // 验证「按 worktree 查看日志」
-const BASE = 'http://127.0.0.1:7801'
+const BASE = process.env.BASE || 'http://127.0.0.1:7801'
 const get = async (p) => {
   const res = await fetch(BASE + p)
   const body = await res.json().catch(() => ({}))

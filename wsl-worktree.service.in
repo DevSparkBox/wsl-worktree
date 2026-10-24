@@ -1,0 +1,27 @@
+[Unit]
+Description=Worktree Web Manager
+After=network.target
+# 有桌面会话时尽量排在图形会话之后，这样 WAYLAND_DISPLAY / DISPLAY 已经就绪；
+# WSL 没有这个 target 时会自动忽略。
+After=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=@SRC@
+ExecStart="@NODE@" "@SRC@/server.mjs"
+# 让 code / konsole / xdg-open 能被找到（nvm 装的 node 不总在默认 PATH 里）。
+# 后两个是 WSL 的 Windows interop 目录：cmd.exe 不在 PATH 里时 code.cmd / wt.exe 会启动失败；
+# 纯 Linux 上这两个目录不存在，不影响。
+Environment=PATH=@NODE_DIR@:%h/.local/bin:/usr/local/bin:/usr/bin:/mnt/c/Windows/System32:/mnt/c/Windows
+# 可选：SSH_AUTH_SOCK / DBUS_SESSION_BUS_ADDRESS 等会话变量放这里
+EnvironmentFile=-%h/.config/wsl-worktree/env
+Restart=on-failure
+RestartSec=2
+# 默认 control-group 会在 restart 时把服务拉起的 Konsole/Dolphin 一起杀掉。
+# 这些 GUI 程序是 detached 的独立窗口，服务重启不应该影响它们。
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

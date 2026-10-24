@@ -4,39 +4,40 @@
 
 ## 这是什么
 
-浏览器里管理 WSL 内所有 git 仓库 worktree 的单页工具。git 全部在 WSL 里执行，Node 原生 HTTP 服务，前端零框架零构建。
+浏览器里管理本机所有 git 仓库 worktree 的单页工具。**同一套代码同时支持 WSL 和纯 Linux**：WSL 下可以调 Windows 的 explorer.exe / wt.exe / code.cmd，纯 Linux 下用 xdg-open / Konsole / code。git 全部在本机执行，Node 原生 HTTP 服务，前端零框架零构建。
 
-- 源码仓库（Windows）：`E:\ai-spaces\tools\wsl-worktree`
-- 运行目录（WSL 原生）：`/home/wangy/.local/share/wsl-worktree`
-- 服务：http://localhost:7801 （systemd user unit `wsl-worktree`，已 enable）
-- `README.md` 里的性能和实测数据都来自本机真实仓库（`~/codes` 下 33 个仓库）
+- 源码 / 运行目录：本仓库（部署模型 A，直接从源码跑，不再复制）
+- 服务：http://localhost:7801 （systemd user unit `wsl-worktree`，由 `install.sh` 生成）
+- 外部程序路径：页面右上角「设置」，或 `config.json` 的 `apps`
+- `README.md` 里的性能和实测数据来自旧 WSL 环境（`~/codes` 下 33 个仓库），Linux 上只做了功能验证，性能数字需重测
 
 ## 运行模型（最容易搞错的地方）
 
-源码在 `/mnt/e`，**服务不是从这里跑的**。改完源码必须同步到 WSL 原生路径并重启：
+**服务直接从源码目录运行**。改完源码重启服务即可，没有“复制到 ~/.local/share”这一步：
 
 ```bash
-wsl -e bash /mnt/e/ai-spaces/tools/wsl-worktree/deploy.sh
+bash install.sh          # 生成/更新 unit、重启；WSL 和纯 Linux 通用
+bash deploy.sh           # 兼容旧命令，等价于 install.sh
 ```
 
-- `deploy.sh` 逐个文件比对 md5 —— `/mnt/e` 上 `cp -f` 偶发静默失败，校验不是可选项。
-- 它只复制 `server.mjs`、`config.json`、`lib/*`、`public/*`、service unit，**不复制测试脚本**（测试脚本按需手动 cp，见下）。
-- `config.json` 已 gitignore。新克隆的仓库若没有它，`deploy.sh` 会在 `cp_verify` 处失败退出；先 `cp config.example.json config.json`。
-- 不要在 Windows 侧直接 `node server.mjs`：代码里的路径、`git` 调用、`/tmp` 都假定 Linux 环境。
-- 改 `public/*` 后同样要 deploy；浏览器强制刷新即可，服务端只设 `cache-control: no-cache`，没有构建产物。
+- `install.sh` 自动找 `node`，把当前源码路径和 node 绝对路径写进 `~/.config/systemd/user/wsl-worktree.service`。
+- `config.json` 已 gitignore；没有它也能跑，全部走默认值（端口 7801、roots 为 `~/codes`；监听地址纯 Linux 默认 127.0.0.1，WSL 默认 0.0.0.0，方便 Windows 浏览器访问）。
+- 源码在 `/mnt/*` 下时 git 扫描会慢，脚本会提示；建议放 WSL 原生路径。
+- 没有 systemd 的 WSL 发行版，直接前台跑：`node server.mjs`。
+- 改 `public/*` 后重启即可；浏览器强刷，服务端只设 `no-cache`，没有构建产物。
 
 服务管理：
 
 ```bash
-wsl -e systemctl --user status wsl-worktree
-wsl -e systemctl --user restart wsl-worktree
-wsl -e journalctl --user -u wsl-worktree -n 50
+systemctl --user status wsl-worktree
+systemctl --user restart wsl-worktree
+journalctl --user -u wsl-worktree -n 50
 ```
 
 ## 技术栈与代码风格
 
 - Node ESM：服务端 `.mjs`，前端 `.js` 用原生 `import`（`import { fuzzyScore } from '/fuzzy.js'`，由静态服务按根路径提供）。
-- **没有 `package.json`、没有 node_modules、没有构建、没有 lint、没有框架**。不要为此引入依赖；能零依赖实现就自己写（`highlight.js`、`fuzzy.js`、`tree-model.js` 都是这个原则的产物）。
+- **产品没有 `package.json`、没有 node_modules、没有构建、没有 lint、没有框架**。不要为此引入依赖；能零依赖实现就自己写（`highlight.js`、`fuzzy.js`、`tree-model.js` 都是这个原则的产物）。本地为 UI 测试临时装的 Playwright 等依赖不要提交。
 - 2 空格缩进、单引号、**不写行尾分号**，以 `const` + 箭头函数为主。改代码顺着现有风格，不要整文件重排。
 - 注释用中文，只写“为什么”和坑，不复述代码。`README.md` 的写法同理：先讲问题与实测数据，再讲实现。
 - UI 全中文，错误文案直接来自后端的 `error`，前端不要硬编码英文提示。
@@ -48,7 +49,8 @@ wsl -e journalctl --user -u wsl-worktree -n 50
 |---|---|
 | `server.mjs` | HTTP 服务、路由、缓存、并发限流；静态文件只服务 `public/` |
 | `lib/git.mjs` | 唯一的 git 调用入口（spawn 数组传参 + 防交互挂起 + 超时/字节上限）、`createLimiter` |
-| `lib/config.mjs` | 配置加载，无 `config.json` 时全用默认值 |
+| `lib/config.mjs` | 配置加载（`WORKTREE_CONFIG` 可覆盖路径）、旧 `windows` 字段映射、设置页写回 |
+| `lib/open.mjs` | WSL/Linux 外部程序解析：命令检测、终端参数、UNC 转换、detached 启动 |
 | `lib/scan.mjs` | 仓库扫描、`worktree list --porcelain -z` / `status --porcelain=v2` 解析、路径建议 |
 | `lib/numstat.mjs` | `--numstat -z` 解析（含重命名双 token） |
 | `lib/ops.mjs` | 全部写操作 + 预检 + 风险判定（fetch/pull/checkout/create/remove/stale） |
@@ -59,6 +61,7 @@ wsl -e journalctl --user -u wsl-worktree -n 50
 | `lib/logfmt.mjs` | commit log 的输出格式（`%x1f` 分隔 + `%x1e` 记录）与解析，server / refs 共用 |
 | `lib/compare.mjs` | 两个提交之间的变更清单与单文件 patch（改名文件必须把新旧路径都传给 git） |
 | `public/index.html` + `app.js` + `style.css` | 主界面：三栏（仓库/worktree+日志/详情）、对话框、布局持久化 |
+| `public/settings.html` + `settings.js` + `settings.css` | 设置页：文件管理器/终端/编辑器的命令、参数、路径样式 |
 | `public/history.html` + `history.js` + `history.css` | 单文件历史页（独立标签页） |
 | `public/tree.html` + `tree.js` + `tree.css` | 完整文件树页（独立标签页），含右侧符号大纲 |
 | `public/compare.html` + `compare.js` + `compare.css` | 提交对比页（选两个变更集，树只列有变更的文件） |
@@ -84,7 +87,7 @@ wsl -e journalctl --user -u wsl-worktree -n 50
    - 写操作统一返回 `{ ok, action, reason?, error? }`，成功 200、业务拒绝 409（前端靠 `reason` 出文案），并在成功后清掉 `stateCache` / `scanCache`。
 3. **前端**：新页面放 `public/`，独立 HTML + JS + CSS 一组；`public/` 之外的文件不会被服务。长耗时的次要信息（如 refs）拆成并行请求，不要拖慢主内容。
 4. **补测试**（见下），**补 README**：新功能加一节，接口加进 API 表，测试命令加进「测试」清单，新坑写进「实现中踩到的坑」或「边界情况处理」表。
-5. `deploy.sh` 后手工在浏览器过一遍，再跑相关测试。
+5. `bash install.sh` 后手工在浏览器过一遍，再跑相关测试。
 
 ## git 调用的硬规则
 
@@ -112,19 +115,14 @@ wsl -e journalctl --user -u wsl-worktree -n 50
 
 ## 测试
 
-三类脚本，跑法不同：
+- **纯逻辑**（`test-fuzzy.mjs`、`test-tree-model.mjs`、`test-highlight.mjs`、`test-linkify.mjs`、`test-symbols.mjs`、`test-open.mjs`、`test-config.mjs`）：直接 `node test-*.mjs`，秒级，WSL/Linux 都能跑。
+- **接口级**：`bash test-api.sh`。它会在 `.test-run/` 下生成临时配置和仓库，在 7813 起一个隔离服务，依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone`，结束后清理。不会碰 7801 上的生产服务。
+  - 单独跑某个脚本时：`BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test-ops.mjs`
+  - 临时目录用 `WT_TEST_TMP`，不要再写死 `/tmp`；服务和测试进程可能不在同一个 mount namespace。
+- **UI 级**：`node test-ui-settings.mjs` 已可在纯 Linux 跑（系统 Chrome + CDP，自动起隔离服务，验证设置页与平台菜单）。其余 `test-ui-*.mjs` / `test-layout.mjs` 仍假设 Edge + `wsl.exe` + `jm_java`，尚未迁移；改 UI 时优先复用 `test-ui-settings.mjs` 的启动/清理方式，不要在单个脚本里再写死浏览器路径。
+- **`test-log-per-wt.mjs`** 只调 API，但依赖本机真实 `jm_java` 及其 worktree 存在，没有就跳过。
 
-- **纯逻辑**（`test-fuzzy.mjs`、`test-tree-model.mjs`、`test-highlight.mjs`、`test-linkify.mjs`、`test-symbols.mjs`）：Windows 或 WSL 都能跑，秒级。
-- **接口级**（`test-ops.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-checkout-tag.mjs`、`test-file-history.mjs`）：**必须在 WSL 里跑**，它们用 `/tmp` 绝对路径造临时仓库；Windows 侧 node 会把路径变成 `\tmp\...`。脚本本身放在源码目录，需要先 cp 到运行目录再执行：
-
-  ```bash
-  wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-ops.mjs . && node test-ops.mjs'
-  ```
-
-- **UI 级**（其余 `test-ui-*.mjs`、`test-layout.mjs`）：**在 Windows 里跑**，用 CDP 驱动 Edge headless 打开 `http://localhost:7801` 真实点击/输入，截图写进 `shots/`。每个脚本自带独立的调试端口（9233/9255/…），需要 Edge 装在 `C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`；需要造临时仓库的 UI 脚本通过 `execFileSync('wsl.exe', ['-d','archlinux','-e','bash','-lc', ...])` 委托给 WSL。少数脚本会用真实仓库（如 `/home/wangy/codes/jm_java`）和真实 worktree，跑前确认环境，跑后自行恢复（脚本里用 finally 收尾）。
-- **`test-log-per-wt.mjs`** 只调 API、不造仓库，但依赖本机真实 `jm_java` 及其 worktree 存在。
-
-测前先 `deploy.sh`，否则测的是旧代码。测试脚本统一约定：
+测试脚本统一约定：
 
 ```js
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(36)} ${d}`) }
@@ -141,10 +139,10 @@ process.exit(fail.length ? 1 : 0)
 ## 不要做
 
 - 不要提交 `shots/`、`config.json`、`node_modules/`、`*.log`、`.?.mjs`（一次性排查脚本用这个命名，用完删）。
-- 不要改行尾：全仓库锁 LF（`.gitattributes`）。`deploy.sh` 变成 CRLF 会在 WSL 里报 `bad interpreter: /usr/bin/env bash^M`。
+- 不要改行尾：全仓库锁 LF（`.gitattributes`）。`install.sh` / `deploy.sh` 变成 CRLF 会在 WSL 里报 `bad interpreter: /usr/bin/env bash^M`。
 - 不要引入 package.json / 依赖 / 构建步骤 / 前端框架，除非有无法回避的理由并同步更新 README。
 - 不要把绝对路径、用户名写进源码（配置走 `config.json`，默认值可用 `~/codes`）。
-- 不要在生产路径上做破坏性手工实验；写操作测试一律在 `/tmp` 造的临时仓库里做。
+- 不要在生产路径上做破坏性手工实验；写操作测试用 `test-api.sh` 或 `.test-run/` 下的临时仓库。
 
 ## 提交风格
 
@@ -159,7 +157,7 @@ docs: 补充配置与仓库约定说明
 ## 出问题先看
 
 - 服务日志：`journalctl --user -u wsl-worktree -n 50`
-- 接口是否旧代码：`deploy.sh` 是否真的成功（md5 校验有无 WARN）
+- 接口是否旧代码：`install.sh` 是否真的重启成功；`systemctl --user status wsl-worktree`
 - 数据不刷新：`scanCacheMs` / `stateCacheMs`；要强制刷新给请求加 `?force=1`
-- 前端报错：Edge DevTools Console；UI 测试脚本里的 `window.__errs`
+- 前端报错：浏览器 DevTools Console；UI 测试脚本里的 `window.__errs`
 - 具体历史坑清单：`README.md` →「实现中踩到的坑」「边界情况处理」

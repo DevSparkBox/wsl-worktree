@@ -5,6 +5,8 @@ shots/
 node_modules/
 
 # 运行期数据
+.test-run/
+.wt-*/
 *.log
 *.pid
 .DS_Store

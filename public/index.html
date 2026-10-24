@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>WSL Worktree</title>
+<title>Worktree</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -14,7 +14,7 @@
       <circle cx="12" cy="6" r="1.6" fill="currentColor"/>
       <path d="M4 4.6v6.8M4 8.5c0-2 1.5-2.5 3-2.5h3.4" stroke="currentColor" stroke-width="1.3" fill="none"/>
     </svg>
-    <span>WSL Worktree</span>
+    <span>Worktree</span>
   </div>
   <div class="roots" id="roots"></div>
   <!-- 左侧面板收起时才显示的仓库切换器（带搜索） -->
@@ -26,6 +26,7 @@
   <div class="stats" id="stats"></div>
   <div class="top-sep"></div>
   <!-- 右上角：打开文件历史页（焦点直接落在路径输入框） -->
+  <button class="btn sm" id="btn-settings" title="设置外部工具路径">设置</button>
   <button class="btn sm" id="btn-file-history" title="打开文件历史页，可直接搜索并切换文件">文件历史</button>
   <div class="panel-toggles" role="group" aria-label="面板显示">
     <button class="top-toggle" id="toggle-left" title="显示/隐藏仓库列表  ([)" aria-label="切换左侧面板" aria-pressed="true">

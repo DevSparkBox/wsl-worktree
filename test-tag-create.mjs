@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process'
-const BASE = 'http://127.0.0.1:7801'
-const ROOT = '/tmp/wt-tagcreate'
+const BASE = process.env.BASE || 'http://127.0.0.1:7801'
+const TMPBASE = process.env.WT_TEST_TMP || '/tmp'
+const ROOT = `${TMPBASE}/wt-tagcreate`
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' }
 const sh = (cwd, a) => execFileSync('git', a, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim()
 // 允许失败的版本（detached HEAD 下 symbolic-ref 会返回非 0）

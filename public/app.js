@@ -1,9 +1,11 @@
-// WSL Worktree — P0 只读客户端
+// Worktree — 浏览器客户端（WSL / Linux 共用）
 import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
 import { linkify } from '/linkify.js'
 const $ = (id) => document.getElementById(id)
 const state = {
   repos: [],
+  platform: 'linux',   // /api/config：wsl | linux
+  distro: '',          // 仅 WSL 有，用来拼 UNC
   repo: null,          // 当前仓库对象
   worktrees: [],
   logWt: null,         // 当前查看日志的 worktree 路径（null = 主工作树）
@@ -448,24 +450,37 @@ function buildWtMenu(wt) {
     },
     { sep: true },
     { icon: ROW_ICONS.vscode, label: '用 VS Code 打开', onClick: openTo('vscode') },
-    { icon: ROW_ICONS.folder, label: '打开资源管理器', onClick: openTo('explorer') },
+    { icon: ROW_ICONS.folder, label: '打开文件管理器', onClick: openTo('explorer') },
     { icon: ROW_ICONS.terminal, label: '在终端中打开', onClick: openTo('wt') },
     { sep: true },
     {
       icon: ROW_ICONS.folder,
-      label: '复制 UNC 路径',
+      label: '复制路径',
       onClick: async () => {
-        // distro 名由后端决定（/api/config 返回），别在前端硬编码
-        const distro = state.distro || 'archlinux'
-        const unc = `\\\\wsl.localhost\\${distro}${wt.path.replace(/\//g, '\\')}`
         try {
-          await navigator.clipboard.writeText(unc)
-          toast('已复制 UNC 路径')
+          await navigator.clipboard.writeText(wt.path)
+          toast('已复制路径')
         } catch {
-          toast(unc)
+          toast(wt.path)
         }
       },
     },
+    // UNC 只在 WSL 下有意义；纯 Linux 隐藏，避免误导
+    ...(state.platform === 'wsl' && state.distro
+      ? [{
+          icon: ROW_ICONS.folder,
+          label: '复制 Windows 路径',
+          onClick: async () => {
+            const unc = `\\\\wsl.localhost\\${state.distro}${wt.path.replace(/\//g, '\\')}`
+            try {
+              await navigator.clipboard.writeText(unc)
+              toast('已复制 Windows 路径')
+            } catch {
+              toast(unc)
+            }
+          },
+        }]
+      : []),
     { sep: true },
     // 主工作区不能删（删了等于删仓库本身），禁掉并说明原因
     {
@@ -493,12 +508,11 @@ $('wt-body').addEventListener('click', async (e) => {
   if (act === 'pull') return openPullDialog(wt)
   if (act === 'remove') return openRemoveDialog(wt)
   if (act === 'copy') {
-    const unc = '\\\\wsl.localhost\\' + (navigator.userAgent ? 'archlinux' : 'archlinux') + path.replace(/\//g, '\\')
     try {
-      await navigator.clipboard.writeText(unc)
-      toast('已复制 UNC 路径')
+      await navigator.clipboard.writeText(path)
+      toast('已复制路径')
     } catch {
-      toast(unc)
+      toast(path)
     }
     return
   }
@@ -806,6 +820,10 @@ function openFileHistory(path, { focus = false } = {}) {
 }
 
 // 顶栏右上角按钮：不依赖是否已选中文件，焦点自动进入路径输入框
+$('btn-settings').addEventListener('click', () => {
+  window.open('/settings.html', '_blank', 'noopener')
+})
+
 $('btn-file-history').addEventListener('click', () => {
   openFileHistory(null, { focus: true })
 })
@@ -903,7 +921,8 @@ async function init() {
   try {
     const cfg = await api('/api/config')
     state.roots = cfg.roots || []
-    state.distro = cfg.distro || 'archlinux'
+    state.platform = cfg.platform || 'linux'
+    state.distro = cfg.distro || ''
     $('roots').textContent = cfg.roots.join(', ')
   } catch {}
   await loadRepos()

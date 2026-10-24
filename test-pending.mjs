@@ -7,7 +7,8 @@ import { listWorktreeFiles, readWorktreeFile } from './lib/tree.mjs'
 const checks = []
 const check = (n, ok, d = '') => { checks.push([n, ok, d]); console.log(`${ok ? 'PASS' : 'FAIL'}  ${n.padEnd(40)} ${d}`) }
 
-const TMP = `/tmp/__pending_${Date.now()}`
+const TMPBASE = process.env.WT_TEST_TMP || '/tmp'
+const TMP = `${TMPBASE}/__pending_${Date.now()}`
 const sh = (cmd, cwd) => {
   try {
     return execFileSync('bash', ['-lc', cmd], { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim()

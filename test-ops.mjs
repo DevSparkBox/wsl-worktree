@@ -3,14 +3,15 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-const ROOT = '/tmp/wt-ops-test'
+const TMPBASE = process.env.WT_TEST_TMP || '/tmp'
+const ROOT = `${TMPBASE}/wt-ops-test`
 const GIT_ENV = {
   ...process.env,
   GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t',
   GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t',
 }
 const sh = (cwd, args) => execFileSync('git', args, { cwd, env: GIT_ENV, encoding: 'utf8' }).trim()
-const BASE = 'http://127.0.0.1:7801'
+const BASE = process.env.BASE || 'http://127.0.0.1:7801'
 
 const post = async (p, body) => {
   const res = await fetch(BASE + p, {

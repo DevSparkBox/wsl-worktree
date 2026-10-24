@@ -1,9 +1,9 @@
 import { createServer } from 'node:http'
-import { spawn, execFileSync } from 'node:child_process'
+import { isIP } from 'node:net'
 import { readFile, stat } from 'node:fs/promises'
-import { join, dirname, basename, extname, posix } from 'node:path'
+import { join, dirname, basename, extname, posix, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadConfig } from './lib/config.mjs'
+import { loadConfig, saveApps } from './lib/config.mjs'
 import { git, createLimiter } from './lib/git.mjs'
 import { scanRepos, parseWorktreePorcelainZ, parseStatusV2, suggestWorktreePath } from './lib/scan.mjs'
 import { parseNumstatZ } from './lib/numstat.mjs'
@@ -16,9 +16,12 @@ import { refsAtCommit, listRefTipCommits } from './lib/refs.mjs'
 import { compareCommits, compareFile } from './lib/compare.mjs'
 import { LOG_FMT, parseLog } from './lib/logfmt.mjs'
 import { startClone, getClone, hasRunningClone } from './lib/clone.mjs'
+import { openTarget, describeApps, normalizeApps, platformInfo } from './lib/open.mjs'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const cfg = await loadConfig()
+const PLATFORM = platformInfo()
+const APP_CTX = { isWsl: PLATFORM.platform === 'wsl', distro: PLATFORM.distro }
 // 两级限流必须用独立实例，否则外层占满槽位后内层永远拿不到槽 → 死锁
 const repoLimit = createLimiter(6)
 const statLimit = createLimiter(8)
@@ -162,25 +165,106 @@ async function getFileDiff(cwd, sha, path, mode = 'commit') {
   return { patch: res.stdout.slice(0, cfg.maxPatchBytes), truncated: res.stdout.length >= cfg.maxPatchBytes, error: ok ? null : res.stderr }
 }
 
-// ---------- 打开 Windows 程序 ----------
-/** 命令是否存在（用于判断 WSL 里有没有 code） */
-function hasCommand(name) {
+// ---------- 仓库 / worktree 路径校验 ----------
+// 只校验“它是一个 git 仓库根”，不限制必须在 roots 下：
+// 接口测试会直接打服务、传临时仓库路径，限制 roots 会把它们全挡掉。
+// 作用是把 /etc、普通目录这类明显不合法的 id 拒掉，避免任意路径执行 git。
+const repoCheckCache = new Map()
+async function verifyRepoPath(raw) {
+  if (typeof raw !== 'string') return null
+  const p = raw.replace(/\/+$/, '')
+  if (!p.startsWith('/')) return null
+  const now = Date.now()
+  const hit = repoCheckCache.get(p)
+  if (hit && now - hit.at < 30000) return hit.ok ? p : null
+  const res = await git(p, ['rev-parse', '--show-toplevel'], { timeout: 5000 })
+  const ok = res.code === 0 && res.stdout.trim().replace(/\/+$/, '') === p
+  // 限制缓存大小：id 来自 URL，不能让随便构造的路径把内存撑爆
+  if (repoCheckCache.size > 1000) repoCheckCache.clear()
+  repoCheckCache.set(p, { at: now, ok })
+  return ok ? p : null
+}
+
+async function resolveRepo(id) {
   try {
-    execFileSync('which', [name], { stdio: 'ignore' })
-    return true
+    return await verifyRepoPath(dec(id))
   } catch {
-    return false
+    return null
   }
 }
 
-function openOnWindows(exe, args) {
-  try {
-    const child = spawn(exe, args, { detached: true, stdio: 'ignore' })
-    child.unref()
-    return { ok: true }
-  } catch (err) {
-    return { ok: false, error: String(err?.message || err) }
+// /api/open 只允许打开扫描结果里的 worktree，避免拿它当任意路径启动器
+let worktreePathCache = { at: 0, data: null }
+async function knownWorktreePaths() {
+  const now = Date.now()
+  if (worktreePathCache.data && now - worktreePathCache.at < 10000) return worktreePathCache.data
+  const repos = await getRepos()
+  const set = new Set()
+  await Promise.all(
+    repos.map((r) =>
+      repoLimit(async () => {
+        const d = await getWorktrees(r.toplevel, { withStatus: false })
+        for (const w of d.worktrees || []) set.add(resolve(w.path))
+      })
+    )
+  )
+  worktreePathCache = { at: now, data: set }
+  return set
+}
+
+// ---------- 请求校验 ----------
+const MAX_BODY_BYTES = 1024 * 1024
+const LOOPBACK = new Set(['localhost', '127.0.0.1', '::1'])
+const WILDCARD = new Set(['0.0.0.0', '::', ''])
+
+function hostName(value) {
+  return String(value || '').replace(/:\d+$/, '').replace(/^\[|\]$/g, '').toLowerCase()
+}
+
+/**
+ * DNS rebinding 的核心是：攻击者让 evil.com 解析到 127.0.0.1，
+ * 浏览器请求里的 Host / Origin 都是 evil.com。只比较 Origin 和 Host 相等没有用，
+ * 所以即使绑定 0.0.0.0（WSL / 局域网），也只接受 localhost、IP 字面量或配置里的主机名。
+ */
+function hostAllowed(host, configured) {
+  if (!host) return true // 非浏览器客户端（curl --http1.0 等）不带 Host，后面还有 Origin/JSON 校验
+  if (LOOPBACK.has(host)) return true
+  if (configured && !WILDCARD.has(configured) && host === configured) return true
+  return isIP(host) !== 0
+}
+
+/**
+ * 这个服务有写操作，默认只监听本机。
+ * - POST 必须是 application/json：跨站表单发不了这个 Content-Type，
+ *   浏览器会先发 preflight，而本服务不返回 CORS 头，从而挡住 CSRF
+ * - 同源 Origin / Sec-Fetch-Site 再校验一层
+ * - 始终校验 Host，挡住 DNS rebinding；0.0.0.0 只意味着端口对外，不代表任意域名可信
+ */
+function checkRequest(req) {
+  if (req.method === 'POST') {
+    const ct = String(req.headers['content-type'] || '').toLowerCase()
+    if (!ct.startsWith('application/json')) {
+      return { code: 415, error: '请求必须是 application/json' }
+    }
+    const origin = req.headers.origin
+    if (origin) {
+      let oh
+      try {
+        oh = new URL(origin).host
+      } catch {
+        return { code: 403, error: '非法 Origin' }
+      }
+      if (oh !== req.headers.host) return { code: 403, error: '跨站请求被拒绝' }
+    }
+    const site = req.headers['sec-fetch-site']
+    if (site && site !== 'same-origin' && site !== 'none') {
+      return { code: 403, error: '跨站请求被拒绝' }
+    }
   }
+  const configured = hostName(cfg.host)
+  const host = hostName(req.headers.host)
+  if (!hostAllowed(host, configured)) return { code: 403, error: 'Host 不被允许' }
+  return null
 }
 
 // ---------- HTTP ----------
@@ -198,15 +282,29 @@ function json(res, code, body) {
   res.end(buf)
 }
 
-async function serveStatic(res, urlPath) {
+async function serveStatic(req, res, urlPath) {
   const rel = urlPath === '/' ? '/index.html' : urlPath
-  const file = join(here, 'public', posix.normalize(rel).replace(/^(\.\.[/\\])+/, ''))
-  if (!file.startsWith(join(here, 'public'))) return json(res, 403, { error: 'forbidden' })
+  const publicRoot = join(here, 'public')
+  const file = join(publicRoot, posix.normalize(rel).replace(/^(\.\.[/\\])+/, ''))
+  if (file !== publicRoot && !file.startsWith(publicRoot + sep)) {
+    return json(res, 403, { error: 'forbidden' })
+  }
   try {
     const st = await stat(file)
     if (!st.isFile()) throw new Error('not a file')
+    // ETag 让刷新时走 304；前端文件很小，但少读一次磁盘总是好的
+    const etag = `"${st.size.toString(16)}-${Math.trunc(st.mtimeMs).toString(16)}"`
+    if (req.headers['if-none-match'] === etag) {
+      res.writeHead(304, { etag, 'cache-control': 'no-cache' })
+      res.end()
+      return
+    }
     const buf = await readFile(file)
-    res.writeHead(200, { 'content-type': MIME[extname(file)] || 'application/octet-stream', 'cache-control': 'no-cache' })
+    res.writeHead(200, {
+      'content-type': MIME[extname(file)] || 'application/octet-stream',
+      'cache-control': 'no-cache',
+      etag,
+    })
     res.end(buf)
   } catch {
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
@@ -215,12 +313,59 @@ async function serveStatic(res, urlPath) {
 }
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`)
+  let url
+  try {
+    // 固定 base，不用 Host 拼 URL：Host 是不可信输入，畸形值会让 new URL 抛异常
+    url = new URL(req.url, 'http://localhost')
+  } catch {
+    return json(res, 400, { error: '非法请求路径' })
+  }
   const p = url.pathname
 
   try {
+    const blocked = checkRequest(req)
+    if (blocked) return json(res, blocked.code, { error: blocked.error })
+
     if (p === '/api/config') {
-      return json(res, 200, { roots: cfg.roots, scanMaxDepth: cfg.scanMaxDepth, distro: process.env.WSL_DISTRO_NAME || 'archlinux' })
+      return json(res, 200, {
+        roots: cfg.roots,
+        scanMaxDepth: cfg.scanMaxDepth,
+        platform: PLATFORM.platform,
+        distro: PLATFORM.platform === 'wsl' ? PLATFORM.distro : null,
+      })
+    }
+
+    // ---------- 设置：外部工具路径 ----------
+    // 只改 apps，不碰 port/host/roots 这些需要重启的字段
+    if (p === '/api/settings') {
+      if (req.method === 'GET') {
+        return json(res, 200, {
+          platform: PLATFORM.platform,
+          distro: PLATFORM.distro,
+          apps: cfg.apps,
+          resolved: describeApps(cfg.apps, APP_CTX),
+        })
+      }
+      if (req.method === 'POST') {
+        const body = await readBody(req)
+        const apps = normalizeApps(body.apps || {})
+        for (const [kind, app] of Object.entries(apps)) {
+          if (app.command.length > 1000 || /[\0\r\n]/.test(app.command)) {
+            return json(res, 400, { ok: false, error: `${kind} 的命令不合法` })
+          }
+          if (app.args.length > 32 || app.args.some((a) => a.length > 1000 || /[\0\r\n]/.test(a))) {
+            return json(res, 400, { ok: false, error: `${kind} 的参数不合法` })
+          }
+        }
+        try {
+          cfg.apps = await saveApps(apps)
+        } catch (err) {
+          return json(res, 409, { ok: false, error: `写入配置失败：${err.message}` })
+        }
+        worktreePathCache = { at: 0, data: null }
+        return json(res, 200, { ok: true, apps: cfg.apps, resolved: describeApps(cfg.apps, APP_CTX) })
+      }
+      return json(res, 405, { ok: false, error: 'method not allowed' })
     }
 
     if (p === '/api/repos') {
@@ -263,9 +408,11 @@ const server = createServer(async (req, res) => {
       if (!dir.startsWith('/')) return json(res, 400, { error: '目标目录必须是绝对路径' })
       if (dir === '/' || dir.endsWith('/')) return json(res, 400, { error: '目标目录不能以 / 结尾' })
 
-      // 必须落在某个扫描根下：否则能往任意位置写，也能克隆到别的仓库里面
-      const roots = (cfg.roots || []).map((r) => r.replace(/\/+$/, ''))
-      const inRoot = roots.some((r) => dir.startsWith(`${r}/`))
+      // 必须落在某个扫描根下：否则能往任意位置写，也能克隆到别的仓库里面。
+      // 先 resolve 再比较，避免 root/../evil 绕过前缀检查。
+      const dirAbs = resolve(dir)
+      const roots = (cfg.roots || []).map((r) => resolve(r))
+      const inRoot = roots.some((r) => dirAbs.startsWith(`${r}${sep}`))
       if (!inRoot) {
         return json(res, 400, { error: `目标目录必须在扫描根下（${roots.join(' / ')}）` })
       }
@@ -275,7 +422,7 @@ const server = createServer(async (req, res) => {
 
       const id = startClone({
         url: url2,
-        dir,
+        dir: dirAbs,
         depth1: Boolean(body.depth1),
         submodules: Boolean(body.submodules),
       })
@@ -294,13 +441,15 @@ const server = createServer(async (req, res) => {
       if (job.status === 'done' && scanCache.data) {
         scanCache = { at: 0, data: null }
         stateCache.clear()
+        worktreePathCache = { at: 0, data: null }
       }
       return json(res, 200, job)
     }
 
     const mWt = p.match(/^\/api\/repos\/([^/]+)\/worktrees$/)
     if (mWt && req.method === 'GET') {
-      const toplevel = dec(mWt[1])
+      const toplevel = await resolveRepo(mWt[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const force = url.searchParams.get('force') === '1'
       if (force) { stateCache.delete(toplevel); stateCache.delete(`list:${toplevel}`) }
       const data = await getWorktrees(toplevel)
@@ -312,7 +461,8 @@ const server = createServer(async (req, res) => {
 
     const mLog = p.match(/^\/api\/repos\/([^/]+)\/log$/)
     if (mLog) {
-      const toplevel = dec(mLog[1])
+      const toplevel = await resolveRepo(mLog[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const rev = url.searchParams.get('rev') || '--all'
       const skip = Number(url.searchParams.get('skip') || 0)
       const count = Math.min(500, Number(url.searchParams.get('count') || 200))
@@ -332,7 +482,8 @@ const server = createServer(async (req, res) => {
 
     const mCommit = p.match(/^\/api\/repos\/([^/]+)\/commit\/([0-9a-f]{4,40}|WORKTREE)$/)
     if (mCommit) {
-      const toplevel = dec(mCommit[1])
+      const toplevel = await resolveRepo(mCommit[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       if (mCommit[2] === 'WORKTREE') {
         // 工作区：必须在具体的 worktree 里跑，各 worktree 的未提交改动互相独立
         const wtParam = url.searchParams.get('wt')
@@ -349,7 +500,8 @@ const server = createServer(async (req, res) => {
 
     const mDiff = p.match(/^\/api\/repos\/([^/]+)\/diff$/)
     if (mDiff) {
-      const toplevel = dec(mDiff[1])
+      const toplevel = await resolveRepo(mDiff[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const sha = url.searchParams.get('sha') || ''
       const path = url.searchParams.get('path') || ''
       // 未提交改动的 diff 必须在具体 worktree 里跑（各 worktree 一份）
@@ -368,7 +520,8 @@ const server = createServer(async (req, res) => {
     // ---------- 单文件历史 ----------
     const mHist = p.match(/^\/api\/repos\/([^/]+)\/file-history$/)
     if (mHist) {
-      const toplevel = dec(mHist[1])
+      const toplevel = await resolveRepo(mHist[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const filePath = url.searchParams.get('path') || ''
       if (!filePath) return json(res, 400, { error: 'path required', commits: [] })
       const follow = url.searchParams.get('follow') !== '0'
@@ -388,7 +541,8 @@ const server = createServer(async (req, res) => {
 
     const mHistDiff = p.match(/^\/api\/repos\/([^/]+)\/file-history-diff$/)
     if (mHistDiff) {
-      const toplevel = dec(mHistDiff[1])
+      const toplevel = await resolveRepo(mHistDiff[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const sha = url.searchParams.get('sha') || ''
       const pathAtCommit = url.searchParams.get('path') || ''
       if (!sha || !pathAtCommit) return json(res, 400, { error: 'sha and path required' })
@@ -406,7 +560,8 @@ const server = createServer(async (req, res) => {
     // 文件列表：给「粘贴路径」的自动完成用。按仓库整体缓存（与 worktree 无关）
     const mFiles = p.match(/^\/api\/repos\/([^/]+)\/files$/)
     if (mFiles) {
-      const toplevel = dec(mFiles[1])
+      const toplevel = await resolveRepo(mFiles[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const data = await listFiles(toplevel)
       if (data.error) return json(res, 500, data)
       return json(res, 200, data)
@@ -415,7 +570,8 @@ const server = createServer(async (req, res) => {
     // ---------- 完整文件树（某 commit 的快照） ----------
     const mTree = p.match(/^\/api\/repos\/([^/]+)\/tree$/)
     if (mTree) {
-      const toplevel = dec(mTree[1])
+      const toplevel = await resolveRepo(mTree[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const sha = url.searchParams.get('sha') || 'HEAD'
       const wtPath = url.searchParams.get('wt')
       let cwd = toplevel
@@ -431,7 +587,8 @@ const server = createServer(async (req, res) => {
 
     const mCat = p.match(/^\/api\/repos\/([^/]+)\/file-content$/)
     if (mCat) {
-      const toplevel = dec(mCat[1])
+      const toplevel = await resolveRepo(mCat[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const sha = url.searchParams.get('sha') || 'HEAD'
       const path = url.searchParams.get('path') || ''
       if (!path) return json(res, 400, { error: 'path required' })
@@ -447,6 +604,7 @@ const server = createServer(async (req, res) => {
         ? await readWorktreeFile(cwd, path, cfg.maxPatchBytes)
         : await catFile(cwd, sha, path)
       if (data.notFound) return json(res, 404, data)
+      if (data.tooLarge) return json(res, 200, data)
       if (data.error) return json(res, 500, data)
       return json(res, 200, data)
     }
@@ -454,7 +612,8 @@ const server = createServer(async (req, res) => {
     // ---------- 在某个 commit 的文件树里按内容搜索 ----------
     const mGrep = p.match(/^\/api\/repos\/([^/]+)\/grep$/)
     if (mGrep) {
-      const toplevel = dec(mGrep[1])
+      const toplevel = await resolveRepo(mGrep[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const sha = url.searchParams.get('sha') || 'HEAD'
       const pattern = url.searchParams.get('q') || ''
       if (!pattern) return json(res, 400, { error: 'q required', files: [] })
@@ -479,7 +638,8 @@ const server = createServer(async (req, res) => {
     // ---------- 某个 commit 上的 refs（tag / 分支） ----------
     const mRefs = p.match(/^\/api\/repos\/([^/]+)\/refs-at$/)
     if (mRefs) {
-      const toplevel = dec(mRefs[1])
+      const toplevel = await resolveRepo(mRefs[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const sha = url.searchParams.get('sha') || 'HEAD'
       const wtPath = url.searchParams.get('wt')
       let cwd = toplevel
@@ -497,7 +657,8 @@ const server = createServer(async (req, res) => {
     // 只给最近 N 条的话，老 tag 指向的提交搜不到
     const mRefLog = p.match(/^\/api\/repos\/([^/]+)\/ref-log$/)
     if (mRefLog) {
-      const toplevel = dec(mRefLog[1])
+      const toplevel = await resolveRepo(mRefLog[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const data = await listRefTipCommits(toplevel)
       if (data.error) return json(res, 500, data)
       return json(res, 200, data)
@@ -507,7 +668,8 @@ const server = createServer(async (req, res) => {
     // a/b 支持 sha / tag / 分支名 / HEAD~n，内部会 rev-parse 成完整 sha
     const mCmp = p.match(/^\/api\/repos\/([^/]+)\/compare$/)
     if (mCmp) {
-      const toplevel = dec(mCmp[1])
+      const toplevel = await resolveRepo(mCmp[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const a = url.searchParams.get('a') || ''
       const b = url.searchParams.get('b') || ''
       if (!a || !b) return json(res, 400, { error: 'a 和 b 都必填', files: [] })
@@ -518,7 +680,8 @@ const server = createServer(async (req, res) => {
 
     const mCmpFile = p.match(/^\/api\/repos\/([^/]+)\/compare-file$/)
     if (mCmpFile) {
-      const toplevel = dec(mCmpFile[1])
+      const toplevel = await resolveRepo(mCmpFile[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const a = url.searchParams.get('a') || ''
       const b = url.searchParams.get('b') || ''
       const path = url.searchParams.get('path') || ''
@@ -531,17 +694,18 @@ const server = createServer(async (req, res) => {
 
     if (p === '/api/prune-dryrun' && req.method === 'POST') {
       const body = await readBody(req)
-      const toplevel = body.toplevel
+      const toplevel = await verifyRepoPath(String(body.toplevel || ''))
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       const res1 = await git(toplevel, ['worktree', 'prune', '-n', '-v'])
       return json(res, 200, { output: res1.stdout + res1.stderr, code: res1.code })
     }
 
     // ---------- 写操作 ----------
     if (req.method === 'POST') {
-      const action = p.replace(/^\/api\/repos\/[^/]+\//, '')
       const mAct = p.match(/^\/api\/repos\/([^/]+)\/(.+)$/)
       if (mAct) {
-        const toplevel = dec(mAct[1])
+        const toplevel = await resolveRepo(mAct[1])
+        if (!toplevel) return json(res, 404, { error: 'unknown repo' })
         const body = await readBody(req)
         let out
 
@@ -613,13 +777,15 @@ const server = createServer(async (req, res) => {
         stateCache.delete(toplevel)
         stateCache.delete(`list:${toplevel}`)
         scanCache = { at: 0, data: null }
+        worktreePathCache = { at: 0, data: null }
         return json(res, out.ok ? 200 : 409, out)
       }
     }
 
     const mBranches = p.match(/^\/api\/repos\/([^/]+)\/branches$/)
     if (mBranches) {
-      const toplevel = dec(mBranches[1])
+      const toplevel = await resolveRepo(mBranches[1])
+      if (!toplevel) return json(res, 404, { error: 'unknown repo' })
       // wt 可选：传了就以该 worktree 为视角算「当前分支」，
       // 这样主工作树 detached 时，别的工作树仍能正确标出自己的当前分支。
       const wtPath = url.searchParams.get('wt')
@@ -638,72 +804,96 @@ const server = createServer(async (req, res) => {
       const path = body.path
       if (!path || typeof path !== 'string') return json(res, 400, { ok: false, error: 'path required' })
 
-      if (target === 'explorer') {
-        const unc = toUnc(path)
-        return json(res, 200, openOnWindows(cfg.windows.explorer, [unc]))
+      // 前端沿用旧的 target 名，这里映射到三类程序；设置页也接受新名字
+      const kind = {
+        explorer: 'fileManager',
+        fileManager: 'fileManager',
+        wt: 'terminal',
+        terminal: 'terminal',
+        vscode: 'editor',
+        editor: 'editor',
+      }[target]
+      if (!kind) return json(res, 400, { ok: false, error: 'unknown target' })
+
+      // 只允许打开扫描结果里的 worktree，避免把接口当任意路径启动器
+      const abs = resolve(path)
+      const allowed = await knownWorktreePaths()
+      if (![...allowed].some((p2) => resolve(p2) === abs)) {
+        return json(res, 400, { ok: false, error: '路径不是已识别的 worktree' })
       }
-      if (target === 'wt') {
-        // wt 路径是可选的（不同机器安装位置不同），没配就明确告知而不是静默失败
-        if (!cfg.windows.wt) {
-          return json(res, 400, {
-            ok: false,
-            error: 'config.json 未配置 windows.wt（Windows Terminal 路径），可在其中填上 wt.exe 的绝对路径',
-          })
-        }
-        const unc = toUnc(path)
-        const distro = process.env.WSL_DISTRO_NAME || 'archlinux'
-        // wt -d <起始目录> wsl.exe -d <distro> --cd <linux path>
-        return json(res, 200, openOnWindows(cfg.windows.wt, ['-d', unc, 'wsl.exe', '-d', distro, '--cd', path]))
-      }
-      if (target === 'vscode') {
-        // 两条路：
-        //   1. WSL 里有 code 命令（装了 Remote - WSL）→ 直接传 Linux 路径，扩展会自己处理
-        //   2. 否则用 Windows 侧的 code.cmd → 必须转成 UNC 路径
-        // 顺序不能反：Windows 的 code 拿 Linux 路径是不认的。
-        if (hasCommand('code')) {
-          try {
-            const child = spawn('code', [path], { detached: true, stdio: 'ignore' })
-            child.unref()
-            return json(res, 200, { ok: true })
-          } catch (err) {
-            return json(res, 200, { ok: false, error: String(err?.message || err) })
-          }
-        }
-        if (cfg.windows.code) {
-          return json(res, 200, openOnWindows(cfg.windows.code, [toUnc(path)]))
-        }
-        return json(res, 400, {
-          ok: false,
-          error: '找不到 VS Code：WSL 里没有 code 命令（可装 Remote - WSL），config.json 里也没配 windows.code',
-        })
-      }
-      return json(res, 400, { ok: false, error: 'unknown target' })
+
+      const out = await openTarget(cfg.apps, kind, abs, APP_CTX)
+      return json(res, 200, out)
     }
 
     if (p.startsWith('/api/')) return json(res, 404, { error: 'not found' })
 
-    return serveStatic(res, p)
+    // 浏览器默认会要 favicon.ico；没有就 204，避免控制台多一条 404
+    if (p === '/favicon.ico') {
+      res.writeHead(204, { 'cache-control': 'max-age=86400' })
+      res.end()
+      return
+    }
+
+    return serveStatic(req, res, p)
   } catch (err) {
-    return json(res, 500, { error: String(err?.stack || err) })
+    // 500 不把 stack 回给浏览器：里面有绝对路径和内部结构
+    console.error('[server]', err)
+    return json(res, err?.status && err.status < 500 ? err.status : 500, {
+      error: err?.status && err.status < 500 ? String(err.message || err) : '服务器内部错误',
+    })
   }
 })
 
 function readBody(req) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const chunks = []
-    req.on('data', (c) => chunks.push(c))
-    req.on('end', () => {
-      try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')) } catch { resolve({}) }
+    let size = 0
+    let tooLarge = false
+    req.on('data', (c) => {
+      if (tooLarge) return
+      size += c.length
+      if (size > MAX_BODY_BYTES) {
+        tooLarge = true
+        return
+      }
+      chunks.push(c)
     })
+    req.on('end', () => {
+      if (tooLarge) {
+        const err = new Error('请求体过大')
+        err.status = 413
+        reject(err)
+        return
+      }
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'))
+      } catch {
+        // 空 body / 非 JSON 一律当空对象，具体校验交给路由
+        resolve({})
+      }
+    })
+    req.on('error', reject)
   })
 }
 
-function toUnc(p) {
-  if (!p) return null
-  return '\\\\wsl.localhost\\' + (process.env.WSL_DISTRO_NAME || 'archlinux') + p.replace(/\//g, '\\')
+// 监听失败（端口被占）要给出明确日志，而不是让 systemd 无声重启
+server.on('error', (err) => {
+  console.error(`[server] 监听 ${cfg.host}:${cfg.port} 失败：${err.message}`)
+  process.exit(1)
+})
+
+// systemd stop / Ctrl-C 时先停 HTTP；detached 打开的 Konsole 等由 KillMode=process 保证不被 kill
+for (const sig of ['SIGTERM', 'SIGINT']) {
+  process.on(sig, () => {
+    server.close(() => process.exit(0))
+    setTimeout(() => process.exit(0), 3000).unref()
+  })
 }
 
 server.listen(cfg.port, cfg.host, () => {
   const url = `http://localhost:${cfg.port}`
-  console.log(`\n  wsl-worktree  →  ${url}\n  roots: ${cfg.roots.join(', ')}\n`)
+  console.log(`\n  wsl-worktree  →  ${url}`)
+  console.log(`  platform: ${PLATFORM.platform}${PLATFORM.distro ? ` (${PLATFORM.distro})` : ''}`)
+  console.log(`  roots: ${cfg.roots.join(', ')}\n`)
 })

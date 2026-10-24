@@ -1,8 +1,10 @@
-# WSL Worktree — 浏览器版 worktree 管理器
+# Worktree — 浏览器版 git worktree 管理器
 
-浏览器里管理 WSL 内所有 git 仓库的 worktree。git 全程在 WSL 内执行，毫秒级；UI 是标准浏览器交互，不用学新快捷键。
+浏览器里管理本机所有 git 仓库的 worktree。**WSL 和纯 Linux 用同一套代码**：WSL 下可以调 Windows 的 explorer.exe / wt.exe / code.cmd，纯 Linux 下用 xdg-open / Konsole / code；git 全程在本机执行，毫秒级；UI 是标准浏览器交互，不用学新快捷键。
 
 **打开：** http://localhost:7801
+
+外部工具路径可以在页面右上角「设置」里维护，也可以直接改 `config.json` 的 `apps`。
 
 ---
 
@@ -1163,16 +1165,19 @@ wt=/etc → 400 unknown worktree              → 拒绝越权
 ## 文件结构
 
 ```
-E:\ai-spaces\tools\wsl-worktree\
+wsl-worktree/
 ├── server.mjs              HTTP 服务 + 路由
 ├── config.json             本机配置（不入库，从 config.example.json 复制）
 ├── config.example.json     配置模板
-├── .gitattributes          行尾锁 LF（deploy.sh 必须是 LF）
+├── install.sh              安装/更新 systemd user 服务（模型 A：直接跑源码）
+├── deploy.sh               兼容旧命令，等同于 install.sh
+├── wsl-worktree.service.in systemd user unit 模板
+├── .gitattributes          行尾锁 LF
 ├── .gitignore              排除 shots/、config.json 等
-├── deploy.sh               同步到 WSL 并重启服务
-├── wsl-worktree.service    systemd user unit
-├── lib\
+├── lib/
 │   ├── git.mjs             spawn 封装 + 并发限流 + 防交互挂起
+│   ├── config.mjs          配置加载 + 设置页写回
+│   ├── open.mjs            WSL/Linux 外部程序打开（UNC / xdg-open / 终端参数）
 │   ├── scan.mjs            仓库扫描 + porcelain 解析
 │   ├── numstat.mjs         numstat -z 解析（含重命名）
 │   ├── ops.mjs             全部写操作（fetch/pull/checkout/create/remove/stale）
@@ -1183,36 +1188,44 @@ E:\ai-spaces\tools\wsl-worktree\
 │   ├── compare.mjs         两个提交之间的变更清单与单文件 patch
 │   ├── clone.mjs           克隆任务（长任务走 job + 轮询，解析 git 进度）
 │   ├── changes.mjs         某个 worktree 的未提交改动（diff HEAD + 未跟踪）
-│   ├── logfmt.mjs          commit log 的输出格式与解析（多处共用）
-│   └── config.mjs          配置加载
-└── public\
+│   └── logfmt.mjs          commit log 的输出格式与解析（多处共用）
+└── public/
     ├── index.html          单页骨架
-    ├── style.css           浅色主题（跟随 IDE light）
+    ├── style.css           浅色主题
     ├── app.js              全部交互逻辑 + 对话框，零框架
-    ├── fuzzy.js            模糊匹配（fuzzyScore / rankByFuzzy），主界面与历史页共用
+    ├── settings.html        设置页：外部工具路径
+    ├── settings.css         设置页样式
+    ├── settings.js          设置页逻辑
+    ├── fuzzy.js            模糊匹配（fuzzyScore / rankByFuzzy）
     ├── linkify.js          commit message 里的 URL 转链接（白名单 + 转义）
     ├── history.html        单文件历史页（独立标签页）
     ├── history.css         历史页样式（双栏）
     ├── history.js          历史页逻辑
-    ├── symbols.js          从源码提取符号（类型/函数）+ 缩进建树（纯逻辑，可单测）
+    ├── symbols.js          从源码提取符号（类型/函数）+ 缩进建树
     ├── outline.js          右侧大纲面板：渲染、跳转、引用、滚动联动
     ├── patch-view.js       unified patch → 带行号表格（历史页 / 对比页共用）
     ├── splitter.js         左右分栏拖动（文件树页 / 对比页共用）
     ├── compare.html        提交对比页
-    ├── compare.css         对比页样式（A/B 选择器、状态徽章、筛选）
+    ├── compare.css         对比页样式
     └── compare.js          对比页逻辑
 ```
 
-测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-pending.mjs`、`test-clone.mjs`、`test-symbols.mjs`、`test-ui-outline.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
+测试脚本（见文末「测试」）：`test-ops.mjs`、`test-file-history.mjs`、`test-tree-model.mjs`、`test-ui-file-tree.mjs`、`test-ui-path-picker.mjs`、`test-ui-file-history.mjs`、`test-fetch-tag.mjs`、`test-tag-create.mjs`、`test-log-per-wt.mjs`、`test-fuzzy.mjs`、`test-ui.mjs`、`test-ui-ops.mjs`、`test-ui-fetch-tag.mjs`、`test-ui-autocomplete.mjs`、`test-ui-toprepo.mjs`、`test-checkout-tag.mjs`、`test-ui-checkout-tag.mjs`、`test-ui-persist-repo.mjs`、`test-layout.mjs`、`test-ui-toolbar.mjs`、`test-pending.mjs`、`test-clone.mjs`、`test-symbols.mjs`、`test-open.mjs`、`test-config.mjs`、`test-api.sh`、`test-ui-settings.mjs`、`test-ui-outline.mjs`、`test-ui-compare.mjs`、`test-ui-grep.mjs`、`test-ui-tags.mjs`、`test-ui-pull-dialog.mjs`、`test-ui-checkout-dirty.mjs`
 
-**源码在 Windows，运行在 WSL 原生路径**（`/home/wangy/.local/share/wsl-worktree`）。
-改完源码执行：
+### 部署：直接跑源码（模型 A）
+
+服务直接从源码目录启动，不再复制到 `~/.local/share/wsl-worktree`。改完源码重启即可，不会出现“源码改了、跑的还是旧副本”。
 
 ```bash
-wsl -e bash /mnt/e/ai-spaces/tools/wsl-worktree/deploy.sh
+bash install.sh          # 首次安装 / 更新服务（自动找 node、生成 unit、重启）
+# 旧命令仍可用，等价于上面这条：
+bash deploy.sh
 ```
 
-`deploy.sh` 会逐个文件比对 md5 —— `/mnt/e` 上 `cp -f` 偶发静默失败，这条校验是必须的。
+- `install.sh` 会把当前源码路径和 node 绝对路径写进 `~/.config/systemd/user/wsl-worktree.service`。
+- WSL 和纯 Linux 通用；WSL 下如果仓库在 `/mnt/c`、`/mnt/e`，脚本会提示 git 扫描会变慢，建议把仓库放到 WSL 原生路径。
+- 旧的 `~/.local/share/wsl-worktree` 不再使用，确认无误后可手动删除。
+- 没有 systemd 的环境（部分 WSL 发行版）脚本会打印前台运行命令：`node server.mjs`。
 
 ---
 
@@ -1222,33 +1235,79 @@ wsl -e bash /mnt/e/ai-spaces/tools/wsl-worktree/deploy.sh
 
 ```bash
 cp config.example.json config.json
-# 然后改里面的 roots 和 windows.wt
+# 然后改 roots；外部程序可以在「设置」页里填，也可以直接改 apps
 ```
 
 ```json
 {
   "port": 7801,
-  "host": "0.0.0.0",
   "roots": ["/home/wangy/codes"],
   "scanMaxDepth": 4,
-  "stateCacheMs": 8000,
-  "scanCacheMs": 30000,
+  "stateCacheMs": 2000,
+  "scanCacheMs": 10000,
   "maxPatchBytes": 2097152,
-  "windows": {
-    "explorer": "/mnt/c/Windows/explorer.exe",
-    "wt": "/mnt/c/Users/wangy/AppData/Local/Microsoft/WindowsApps/wt.exe"
+  "apps": {
+    "fileManager": { "command": "", "args": [], "pathStyle": "auto" },
+    "terminal":    { "command": "", "args": [], "pathStyle": "auto" },
+    "editor":      { "command": "", "args": [], "pathStyle": "auto" }
   }
 }
 ```
 
-- `roots`：扫描根目录，可加多个。支持 `~/codes` 写法，会自动展开为当前用户的家目录
-- `scanMaxDepth`：递归深度。当前 `~/codes` 最深的仓库是 `products/asset`（4 层）
-- `host: 0.0.0.0`：Mirrored 网络下 Windows 侧可直接访问
-- `windows.wt`：**可留空**。留空时「终端」按钮会提示未配置，不会静默失败（不同机器 wt.exe 位置不同）
+- `roots`：扫描根目录，可加多个。支持 `~/codes`，会展开为当前用户家目录
+- `scanMaxDepth`：递归深度
+- `host`：不写时纯 Linux 监听 `127.0.0.1`（只允许本机），WSL 监听 `0.0.0.0`（Windows 浏览器通常要通过这个地址访问 WSL 端口）。显式写在 config.json 里的值优先。即使监听 `0.0.0.0`，Host 也只接受 `localhost`、IP 字面量或配置里的主机名（防 DNS rebinding）；局域网访问请直接用 IP，注意暴露风险
+- `apps`：三类外部程序。`command` 留空 = 自动检测；`args` 里 `{path}` 会替换成目标路径；`pathStyle` 为 `auto` / `native` / `windows`
+  - WSL：`explorer.exe`、`wt.exe`、`code.cmd` 自动用 `\\wsl.localhost\<distro>\...`；Linux 原生程序用 `/home/...`
+  - 纯 Linux：`xdg-open` / `dolphin` / `konsole` / `code` 都用原生路径
+  - 终端留空时按命令自动补参数：Konsole `--workdir {path}`、GNOME Terminal `--working-directory {path}`、Windows Terminal 用 `wt -d <unc> wsl.exe -d <distro> --cd <path>`
+- 旧的 `windows.explorer` / `windows.wt` / `windows.code` 仍然能读：没有 `apps` 时会自动映射成 `fileManager` / `terminal` / `editor`
 
-**没有 `config.json` 也能跑**：全部走默认值（端口 7801、roots 为 `~/codes`、wt 为空）。所以克隆下来直接 `node server.mjs` 就能用，只是终端按钮不可用。
+**没有 `config.json` 也能跑**：端口 7801、roots 为 `~/codes`、外部程序全自动检测；监听地址纯 Linux 默认 `127.0.0.1`，WSL 默认 `0.0.0.0`。
 
-改完配置也要执行 `deploy.sh`（重启才生效）。
+改 `port` / `host` / `roots` 后要重启服务；外部程序在「设置」页保存后立即生效，不用重启。直接手改 `config.json` 后也需要重启。
+
+---
+
+## 设置页
+
+右上角「设置」打开 `/settings.html`，维护三类外部程序：
+
+| 字段 | 说明 |
+|---|---|
+| 命令 | 可执行文件绝对路径；留空 = 自动检测 |
+| 参数 | 一行一个，`{path}` 会替换成 worktree 路径；留空时按程序补默认参数 |
+| 路径样式 | `自动` / `Linux 原生路径` / `Windows UNC 路径` |
+
+保存走 `POST /api/settings`，只写回 `config.json` 的 `apps`，不碰 `port` / `host` / `roots`，所以**立即生效、不用重启**。设置页会显示当前平台和自动检测到的命令；检测不到时在卡片右上角给出原因。
+
+几个例子：
+
+```json
+{
+  "apps": {
+    "terminal": { "command": "/usr/bin/konsole", "args": ["--workdir", "{path}"], "pathStyle": "auto" },
+    "editor": { "command": "/usr/bin/code", "args": [], "pathStyle": "auto" },
+    "fileManager": { "command": "", "args": [], "pathStyle": "auto" }
+  }
+}
+```
+
+WSL 下如果填 Windows 程序（`explorer.exe`、`code.cmd`、`wt.exe`），`pathStyle: auto` 会自动把路径转成 `\\wsl.localhost\<distro>\...`；`.cmd` / `.bat` 会经 `cmd.exe /c` 启动。纯 Linux 下填 `xdg-open` / `dolphin` / `konsole` / `code` 即可，路径保持 `/home/...`。
+
+---
+
+## WSL 与纯 Linux 的差异
+
+| 能力 | WSL | 纯 Linux |
+|---|---|---|
+| 平台识别 | `WSL_DISTRO_NAME` / `/proc/sys/kernel/osrelease` | 默认 `linux` |
+| 文件管理器 | 优先 `explorer.exe`（UNC） | `xdg-open` / `dolphin` / `nautilus` / `thunar` |
+| 终端 | 优先 Windows Terminal（`wt -d <unc> wsl.exe --cd <path>`），也可用 Konsole 等 | `$TERMINAL` / Konsole / GNOME Terminal / kitty / alacritty / wezterm / foot / xterm |
+| 编辑器 | 原生 `code` 用 Linux 路径；Windows `code.cmd` 用 UNC | `code` / `codium` / `cursor`，原生路径 |
+| 服务 | systemd user（发行版需启用 systemd），否则前台跑 | systemd user，`install.sh` 自动生成 unit |
+
+代码只在一个地方分支：`lib/open.mjs`。服务端和前端共用 `/api/config` 返回的 `platform` / `distro`；前端在纯 Linux 下隐藏「复制 Windows 路径」，只显示原生「复制路径」。
 
 ---
 
@@ -1256,7 +1315,7 @@ cp config.example.json config.json
 
 本目录是一个独立 git 仓库（`main` 分支）。几个约定：
 
-**行尾锁死为 LF**（`.gitattributes`）。这个项目跨 Windows 编辑、WSL 执行，如果 `deploy.sh` 被转成 CRLF，在 WSL 里会报 `bad interpreter: /usr/bin/env bash^M`，极难排查。所以：
+**行尾锁死为 LF**（`.gitattributes`）。这个项目可能在 Windows 编辑、在 WSL / 纯 Linux 执行，如果 `install.sh` 被转成 CRLF，在 Linux 里会报 `bad interpreter: /usr/bin/env bash^M`，极难排查。所以：
 
 ```
 * text=auto eol=lf
@@ -1267,17 +1326,19 @@ cp config.example.json config.json
 
 | 路径 | 原因 |
 |---|---|
-| `shots/` | UI 测试截图，每次跑测试都重新生成，4.9MB |
+| `shots/` | UI 测试截图，每次跑测试都重新生成 |
 | `config.json` | 含本机绝对路径，用 `config.example.json` 作模板 |
 | `*.log` / `node_modules/` / `.?.mjs` | 运行产物、依赖、一次性调试脚本 |
 
-排除了截图后 `.git` 只有 433KB。
+截图不入库，`.git` 体积随提交历史增长。
 
 ## API
 
 | 端点 | 说明 |
 |---|---|
-| `GET /api/config` | 当前配置 |
+| `GET /api/config` | 当前配置 + `platform`（`wsl` / `linux`）+ WSL 发行版名 |
+| `GET /api/settings` | 外部程序配置 + 自动检测结果（设置页用） |
+| `POST /api/settings` | `{apps:{fileManager,terminal,editor}}`，写回 `config.json`，只改 `apps` |
 | `GET /api/repos[?force=1]` | 仓库列表 + worktree 计数 |
 | `GET /api/repos/:id/worktrees[?force=1]` | worktree 详情（含 status） |
 | `GET /api/repos/:id/log?rev=&skip=&count=&wt=` | 提交日志，`wt` 指定在哪个 worktree 里执行 |
@@ -1297,7 +1358,7 @@ cp config.example.json config.json
 | `GET /api/repos/:id/compare-file?a=&b=&path=&old=` | 单文件 patch；改名文件必须同时传 old |
 | `GET /api/repos/:id/refs-at?sha=&wt=` | 该提交上的 tag 与分支（annotated 会标记） |
 | `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
-| `POST /api/open` | `{target:'explorer'\|'wt', path}` 打开 Windows 程序 |
+| `POST /api/open` | `{target:'fileManager'\|'terminal'\|'editor', path}`；兼容旧名 `explorer` / `wt` / `vscode`。`path` 必须是扫描结果里的 worktree |
 
 写操作（全部 `POST`，路径前缀 `/api/repos/:id/`）：
 
@@ -1315,20 +1376,29 @@ cp config.example.json config.json
 
 写操作返回 `200`（成功）或 `409`（业务拒绝），body 里 `reason` 字段给出具体原因（`branch-in-use` / `path-exists` / `needs-force` / `has-unpushed` / `diverged` / `no-upstream` / `conflict` / `is-main` 等），前端据此渲染中文提示。
 
-`:id` 是 toplevel 路径的 base64url —— 路径含中文/空格，不能用原始字符串做 URL 段。
+`:id` 是 toplevel 路径的 base64url —— 路径含中文/空格，不能用原始字符串做 URL 段。服务端会校验它是真正的 git 仓库根；`/api/open` 还会校验路径来自扫描结果，避免被当成任意路径启动器。
+
+安全默认值：监听 `127.0.0.1`；所有 `POST` 必须是 `application/json`，并校验同源 `Origin` / `Sec-Fetch-Site`；请求体上限 1MB；静态文件带 ETag。
 
 ---
 
 ## 服务管理
 
 ```bash
-wsl -e systemctl --user status wsl-worktree    # 状态
-wsl -e systemctl --user restart wsl-worktree   # 重启
-wsl -e systemctl --user stop wsl-worktree      # 停止
-wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
+systemctl --user status wsl-worktree    # 状态
+systemctl --user restart wsl-worktree   # 重启
+systemctl --user stop wsl-worktree      # 停止
+journalctl --user -u wsl-worktree -n 50 # 日志
 ```
 
-已 enable，WSL 启动即自动运行。
+`install.sh` 会 enable 服务，登录后自动运行。WSL 用 systemd 需要该发行版启用 systemd；没有的话直接前台跑 `node server.mjs`。
+
+几个部署细节：
+
+- unit 里 `Environment=PATH=<node目录>:/usr/local/bin:/usr/bin`，nvm 装的 node 不会因为 systemd 的 PATH 而找不到
+- `KillMode=process`：服务重启时不会把已经打开的 Konsole / Dolphin 一起杀掉
+- 需要 `SSH_AUTH_SOCK`、`DBUS_SESSION_BUS_ADDRESS` 等桌面会话变量时，写进 `~/.config/wsl-worktree/env`（systemd `EnvironmentFile`，可选）
+- 纯 Linux 下如果服务在登录前启动、拿不到 Wayland/X11 变量，把 `loginctl enable-linger $USER` 打开，或把变量放进上面的 env 文件
 
 ---
 
@@ -1434,108 +1504,31 @@ wsl -e journalctl --user -u wsl-worktree -n 50 # 日志
 ## 测试
 
 ```bash
-# 接口级：在 /tmp 造临时仓库，验证全部写操作与安全闸门（35 项）
-wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-ops.mjs . && node test-ops.mjs'
-
-# 接口级：验证 per-worktree 日志隔离
-node test-log-per-wt.mjs
-
-# UI 只读：CDP 驱动 Edge 真实点击（21 项）
-node test-ui.mjs
-
-# UI 写操作对话框（25 项）
-node test-ui-ops.mjs
-
-# UI 布局：折叠 / 拖拽 / 约束 / 持久化（20 项，含真实鼠标拖拽事件）
-node test-layout.mjs
-
-# 接口级：fetch 的 tag 冲突处理（16 项）
-wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-fetch-tag.mjs . && node test-fetch-tag.mjs'
-
-# UI：tag 冲突对话框（10 项）
-node test-ui-fetch-tag.mjs
-
-# 模糊匹配算法（20 项，纯函数，秒级）
+# 纯逻辑（秒级，WSL / Linux 都能跑）
 node test-fuzzy.mjs
-
-# 接口级：基于 tag 创建 worktree（19 项）
-wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-tag-create.mjs . && node test-tag-create.mjs'
-
-# UI：自动完成 / 模糊匹配 / tag 模式（27 项）
-node test-ui-autocomplete.mjs
-
-# UI：顶栏仓库切换器（22 项）
-node test-ui-toprepo.mjs
-
-# 接口级：checkout 到 tag（17 项，含同名 tag/分支歧义）
-wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-checkout-tag.mjs . && node test-checkout-tag.mjs'
-
-# UI：切换分支对话框的 tag 支持（17 项）
-node test-ui-checkout-tag.mjs
-
-# UI：刷新后恢复上次选中的仓库（22 项）
-node test-ui-persist-repo.mjs
-
-# 接口级：单文件历史（23 项，含改名/中文路径/统计）
-wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-file-history.mjs . && node test-file-history.mjs'
-
-# UI：文件历史入口与页面（27 项）
-node test-ui-file-history.mjs
-
-# UI：历史页顶栏路径切换器（25 项）
-node test-ui-path-picker.mjs
-
-# 纯逻辑：建树 + 单链压缩（26 项）
 node test-tree-model.mjs
-
-# 纯逻辑：语法高亮（53 项，含转义/保真/性能）
 node test-highlight.mjs
-
-# 纯逻辑：URL 链接化（37 项，含协议白名单/中文标点边界）
 node test-linkify.mjs
-
-# UI：顶栏发布标签（28 项）
-node test-ui-tags.mjs
-
-# UI：更新分支对话框按钮退场（20 项）
-node test-ui-pull-dialog.mjs
-
-# 未提交更改的三个数据源（19 项，需在 WSL 跑）
-wsl -e bash -c 'cd /home/wangy/.local/share/wsl-worktree && cp /mnt/e/ai-spaces/tools/wsl-worktree/test-pending.mjs . && node test-pending.mjs'
-
-# 克隆仓库（进度解析 + 接口 + 端到端，20 项）
-node test-clone.mjs
-
-# 符号提取与建树（纯逻辑，60 项）
 node test-symbols.mjs
+node test-open.mjs
+node test-config.mjs
 
-# UI：文件树页的符号大纲（25 项）
-node test-ui-outline.mjs
+# 接口级：自带隔离服务（7813）+ 临时仓库，跑完自动清理
+bash test-api.sh
 
-# UI：提交对比页（61 项，含接口与页面）
-node test-ui-compare.mjs
+# 只跑某一组接口测试（先按 test-api.sh 的方式起服务）
+BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test-ops.mjs
 
-# UI：顶栏/日志表窄宽度排版（16 项）
-node test-ui-toolbar.mjs
-
-# UI：切换分支遇到本地改动的强制切换出口（20 项）
-node test-ui-checkout-dirty.mjs
-
-# UI：内容搜索（41 项，含接口与页面）
-node test-ui-grep.mjs
-
-# UI：commit 里的 URL 可点击（16 项）
-node test-ui-links.mjs
-
-# 接口+UI：完整文件树（55 项）
-node test-ui-file-tree.mjs
+# Linux UI 冒烟：设置页保存 + 主界面菜单（系统 Chrome，零依赖）
+node test-ui-settings.mjs
 ```
 
-`test-ops.mjs` 必须在 WSL 里跑（它用 `/tmp` 绝对路径造仓库，Windows 侧 node 会把路径转成 `\tmp\...`）。
-
-`test-layout.mjs` 用 `Input.dispatchMouseEvent` 发真实拖拽、用 `Input.dispatchKeyEvent` 发真实按键 —— 因为把 `KeyboardEvent` dispatch 到 `document` 时 `e.target` 是 document 而非元素，测不出真实行为。
-
----
+- `test-open.mjs`：`lib/open.mjs` 的纯函数测试，覆盖 Linux 原生路径、WSL UNC、`code.cmd`、`wt.exe` 特殊参数、`{path}` 替换、非法路径样式。
+- `test-api.sh`：依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone`。临时目录用 `WT_TEST_TMP` 指定，不写死 `/tmp`（服务和测试进程可能不在同一个 mount namespace）。
+- `test-log-per-wt.mjs` 只调 API，但依赖本机真实 `jm_java` 仓库和 worktree；没有就跳过。
+- `test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页三类工具、保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
+- **其余 UI 脚本（`test-ui-*.mjs`、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、`test-ui-settings.mjs` 和手工页面验证为准。
+- UI 脚本结束前断言 `window.__errs` 为空；布局类测试用 `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` 发真实事件。
 
 ## 下一步
 

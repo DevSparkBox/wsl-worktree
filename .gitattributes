@@ -1,9 +1,9 @@
-# 这个项目跨 Windows 编辑 / WSL 执行，行尾必须锁死。
+# 这个项目可能在 Windows 编辑、在 WSL 或纯 Linux 执行，行尾必须锁死。
 # 默认：文本文件入库统一 LF，检出时不转换（避免 shell 脚本被改成 CRLF 后
-# 在 WSL 里报 "bad interpreter: /usr/bin/env bash^M"）。
+# 在 Linux 里报 "bad interpreter: /usr/bin/env bash^M"）。
 * text=auto eol=lf
 
-# shell 脚本必须是 LF，否则 WSL 里无法执行
+# shell 脚本必须是 LF，否则 Linux 里无法执行
 *.sh text eol=lf
 
 # Windows 侧可能需要 CRLF 的文件
