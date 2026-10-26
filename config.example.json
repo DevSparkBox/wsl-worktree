@@ -2,7 +2,6 @@
   "port": 7801,
   "roots": ["/home/<你的用户名>/codes"],
   "scanMaxDepth": 4,
-  "worktreeDirSuffix": "-{branch}",
   "stateCacheMs": 2000,
   "scanCacheMs": 10000,
   "maxPatchBytes": 2097152,

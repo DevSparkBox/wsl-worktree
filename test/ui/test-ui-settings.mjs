@@ -171,12 +171,31 @@ try {
   const platform = await ev(`document.getElementById('settings-platform').textContent`)
   check('设置页显示平台', /Linux/.test(platform.value || ''), platform.value)
   const cards = await ev(`document.querySelectorAll('.settings-card').length`)
-  check('三类外部程序卡片', cards.value === 3, `${cards.value} 张`)
+  check('设置卡片数量', cards.value === 6, `${cards.value} 张`)
+  const configPath = await ev(`document.getElementById('settings-config-path').textContent`)
+  check('显示配置文件路径', configPath.value === CONFIG, configPath.value)
+
+  const readonly = await ev(`({
+    port: document.getElementById('settings-port').textContent,
+    host: document.getElementById('settings-host').textContent,
+    tag: document.getElementById('settings-port').tagName,
+  })`)
+  check('端口只读展示', readonly.value?.port === String(PORT) && readonly.value?.tag === 'CODE', JSON.stringify(readonly.value))
+  check('监听地址只读展示', readonly.value?.host === '127.0.0.1', JSON.stringify(readonly.value))
+
+  const general = await ev(`({
+    roots: document.getElementById('roots').value,
+    depth: document.getElementById('scanMaxDepth').value,
+    stateCache: document.getElementById('stateCacheMs').value,
+  })`)
+  check('通用配置预填', general.value?.roots.includes(REPOS) && general.value?.depth === '4', JSON.stringify(general.value))
 
   const detected = await ev(`[...document.querySelectorAll('.settings-detected')].map(x => x.textContent)`)
   check('自动检测结果显示', (detected.value || []).some((x) => x.includes('/')), JSON.stringify(detected.value))
 
   await ev(`(() => {
+    document.getElementById('scanMaxDepth').value = '7'
+    document.getElementById('stateCacheMs').value = '321'
     document.getElementById('cmd-editor').value = '/bin/true'
     document.getElementById('args-editor').value = '{path}\\n--flag'
     document.getElementById('style-editor').value = 'native'
@@ -187,7 +206,9 @@ try {
 
   const cfg = JSON.parse(readFileSync(CONFIG, 'utf8'))
   check('设置写回 config.json', cfg.apps?.editor?.command === '/bin/true' && cfg.apps.editor.args.length === 2, JSON.stringify(cfg.apps?.editor))
-  check('其他字段未丢', cfg.port === PORT && cfg.roots?.[0] === REPOS, `port=${cfg.port}`)
+  check('通用配置写回 config.json', cfg.scanMaxDepth === 7 && cfg.stateCacheMs === 321, `depth=${cfg.scanMaxDepth} ttl=${cfg.stateCacheMs}`)
+  check('其他字段未丢', cfg.port === PORT && cfg.host === '127.0.0.1' && cfg.roots?.[0] === REPOS, `port=${cfg.port}`)
+  await shot('ui-settings-page.png')
 
   // ---------- 主界面 ----------
   await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` })

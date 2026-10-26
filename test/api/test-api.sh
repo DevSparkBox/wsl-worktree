@@ -64,7 +64,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   -H 'Content-Type: text/plain' -d '{}' "$BASE/api/settings")
 [[ "$code" == 415 ]] || { echo "FAIL 非 JSON 写请求：期望 415，实际 $code" >&2; exit 1; }
 echo "PASS  非 JSON 写请求被拒绝                 415"
-for t in test-ops.mjs test-file-history.mjs test-fetch-tag.mjs test-tag-create.mjs test-checkout-tag.mjs test-pending.mjs test-clone.mjs; do
+for t in test-ops.mjs test-file-history.mjs test-fetch-tag.mjs test-tag-create.mjs test-checkout-tag.mjs test-pending.mjs test-clone.mjs test-settings.mjs; do
   echo
   echo "===== $t ====="
   "$NODE" "$HERE/$t"

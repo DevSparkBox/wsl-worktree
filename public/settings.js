@@ -1,5 +1,5 @@
-// 设置页：只维护外部工具（文件管理器 / 终端 / 编辑器）的路径与参数。
-// 其余配置（端口、扫描根）需要改 config.json 并重启，放在这个页面之外。
+// 设置页：扫描根目录、缓存上限、外部工具。
+// 端口和监听地址只读：它们决定服务怎么监听，属于安全边界，只能手改 config.json 后重启。
 
 const $ = (id) => document.getElementById(id)
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
@@ -31,7 +31,11 @@ const STYLES = [
 async function api(path, opts) {
   const res = await fetch(path, opts)
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+  if (!res.ok) {
+    const err = new Error(data.error || `HTTP ${res.status}`)
+    err.field = data.field
+    throw err
+  }
   return data
 }
 
@@ -45,9 +49,49 @@ function detectedText(resolved) {
   return `${resolved.command || ''} ${(resolved.args || []).join(' ')}`.trim()
 }
 
+function renderNotice(data) {
+  const el = $('settings-notice')
+  const lines = []
+  let isErr = false
+
+  if (data.configError) {
+    isErr = true
+    lines.push(`配置文件读不出来：${data.configError}。请先修好 ${data.configPath || 'config.json'}，否则保存会被拒绝。`)
+  }
+
+  const pending = data.restartRequired || []
+  if (pending.length) {
+    const saved = data.config || {}
+    const effective = data.effective || {}
+    const parts = []
+    if (pending.includes('port')) parts.push(`端口 ${effective.port} → ${saved.port}`)
+    if (pending.includes('host')) parts.push(`监听地址 ${effective.host || '默认'} → ${saved.host || '默认'}`)
+    lines.push(`配置文件里的${parts.join('、')}已变更，重启服务后生效。`)
+  }
+
+  el.hidden = lines.length === 0
+  el.className = 'settings-notice' + (isErr ? ' err' : '')
+  el.textContent = lines.join('\n')
+}
+
 function render(data) {
+  const cfg = data.config || {}
+  const effective = data.effective || {}
+
   $('settings-platform').textContent =
     data.platform === 'wsl' ? `WSL${data.distro ? ` · ${data.distro}` : ''}` : 'Linux'
+
+  $('settings-config-path').textContent = data.configPath || ''
+  $('settings-port').textContent = String(effective.port ?? '')
+  $('settings-host').textContent = effective.host || '（默认）'
+  $('settings-restart-badge').hidden = !(data.restartRequired || []).length
+  renderNotice(data)
+
+  $('roots').value = (cfg.roots || []).join('\n')
+  $('scanMaxDepth').value = cfg.scanMaxDepth ?? ''
+  $('stateCacheMs').value = cfg.stateCacheMs ?? ''
+  $('scanCacheMs').value = cfg.scanCacheMs ?? ''
+  $('maxPatchBytes').value = cfg.maxPatchBytes ?? ''
 
   $('settings-apps').innerHTML = KINDS.map(({ key, label, hint }) => {
     const app = data.apps?.[key] || { command: '', args: [], pathStyle: 'auto' }
@@ -76,9 +120,12 @@ function render(data) {
         </label>
       </section>`
   }).join('')
+
+  // 配置文件坏了就禁止保存：saveSettings 会拒绝覆盖，提前禁用比点了才报错更清楚
+  $('settings-save').disabled = Boolean(data.configError)
 }
 
-function collect() {
+function collectApps() {
   const apps = {}
   for (const { key } of KINDS) {
     apps[key] = {
@@ -93,6 +140,45 @@ function collect() {
   return apps
 }
 
+function collectConfig() {
+  return {
+    roots: $('roots').value
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    scanMaxDepth: Number($('scanMaxDepth').value),
+    stateCacheMs: Number($('stateCacheMs').value),
+    scanCacheMs: Number($('scanCacheMs').value),
+    maxPatchBytes: Number($('maxPatchBytes').value),
+  }
+}
+
+/**
+ * 只提交改过的项：否则默认 roots（比如还没建的 ~/codes）会让「只改编辑器」也保存失败。
+ * 保存时后端只对提交了的字段做校验。
+ */
+function collectConfigPatch() {
+  const next = collectConfig()
+  const saved = current.config || {}
+  const patch = {}
+  for (const key of Object.keys(next)) {
+    const before = key === 'roots' ? (saved.roots || []) : saved[key]
+    if (JSON.stringify(before) !== JSON.stringify(next[key])) patch[key] = next[key]
+  }
+  return patch
+}
+
+function clearInvalid() {
+  document.querySelectorAll('.settings-field .invalid').forEach((el) => el.classList.remove('invalid'))
+}
+
+function markInvalid(field) {
+  const el = field ? $(field) : null
+  if (!el) return
+  el.classList.add('invalid')
+  el.focus()
+}
+
 let messageTimer = 0
 
 function message(text, isErr = false) {
@@ -104,11 +190,22 @@ function message(text, isErr = false) {
   messageTimer = setTimeout(() => { el.hidden = true }, isErr ? 6000 : 2500)
 }
 
-let current = { platform: 'linux', distro: '', apps: {}, resolved: {} }
+let current = {
+  platform: 'linux',
+  distro: '',
+  apps: {},
+  resolved: {},
+  config: {},
+  effective: {},
+  restartRequired: [],
+  configPath: '',
+  configError: null,
+}
 
 async function load() {
   try {
     current = await api('/api/settings')
+    clearInvalid()
     render(current)
   } catch (err) {
     message(`读取设置失败：${err.message}`, true)
@@ -118,22 +215,31 @@ async function load() {
 $('settings-save').addEventListener('click', async () => {
   const btn = $('settings-save')
   btn.disabled = true
+  clearInvalid()
   try {
+    const payload = { apps: collectApps() }
+    const config = collectConfigPatch()
+    if (Object.keys(config).length) payload.config = config
     const data = await api('/api/settings', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ apps: collect() }),
+      body: JSON.stringify(payload),
     })
-    current = { ...current, ...data }
+    current = data
     render(current)
-    message('已保存。打开 worktree 时会使用新配置。')
+    message('已保存。扫描根目录、缓存与外部工具立即生效；端口和监听地址仍需手改配置文件后重启。')
   } catch (err) {
+    if (err.field) markInvalid(err.field)
     message(`保存失败：${err.message}`, true)
   } finally {
-    btn.disabled = false
+    btn.disabled = Boolean(current.configError)
   }
 })
 
 $('settings-reload').addEventListener('click', load)
+
+document.addEventListener('input', (e) => {
+  if (e.target instanceof Element) e.target.classList.remove('invalid')
+})
 
 load()

@@ -8,7 +8,7 @@
 
 - 源码 / 运行目录：本仓库（部署模型 A，直接从源码跑，不再复制）
 - 服务：http://localhost:7801 （systemd user unit `wsl-worktree`，由 `install.sh` 生成）
-- 外部程序路径：页面右上角「设置」，或 `config.json` 的 `apps`
+- 扫描根目录 / 缓存 / 补丁上限 / 外部程序路径：页面右上角「设置」；端口和监听地址只读，只能改 `config.json` 后重启
 - `README.md` 里的性能和实测数据来自旧 WSL 环境（`~/codes` 下 33 个仓库），Linux 上只做了功能验证，性能数字需重测
 
 ## 运行模型（最容易搞错的地方）
@@ -49,7 +49,7 @@ journalctl --user -u wsl-worktree -n 50
 |---|---|
 | `server.mjs` | HTTP 服务、路由、缓存、并发限流；静态文件只服务 `public/` |
 | `lib/git.mjs` | 唯一的 git 调用入口（spawn 数组传参 + 防交互挂起 + 超时/字节上限）、`createLimiter` |
-| `lib/config.mjs` | 配置加载（`WORKTREE_CONFIG` 可覆盖路径）、旧 `windows` 字段映射、设置页写回 |
+| `lib/config.mjs` | 配置加载（`WORKTREE_CONFIG` 可覆盖路径）、校验/坏值回退、旧 `windows` 字段映射、设置页写回 |
 | `lib/open.mjs` | WSL/Linux 外部程序解析：命令检测、终端参数、UNC 转换、detached 启动 |
 | `lib/scan.mjs` | 仓库扫描、`worktree list --porcelain -z` / `status --porcelain=v2` 解析、路径建议 |
 | `lib/numstat.mjs` | `--numstat -z` 解析（含重命名双 token） |
@@ -61,7 +61,7 @@ journalctl --user -u wsl-worktree -n 50
 | `lib/logfmt.mjs` | commit log 的输出格式（`%x1f` 分隔 + `%x1e` 记录）与解析，server / refs 共用 |
 | `lib/compare.mjs` | 两个提交之间的变更清单与单文件 patch（改名文件必须把新旧路径都传给 git） |
 | `public/index.html` + `app.js` + `style.css` | 主界面：三栏（仓库/worktree+日志/详情）、对话框、布局持久化 |
-| `public/settings.html` + `settings.js` + `settings.css` | 设置页：文件管理器/终端/编辑器的命令、参数、路径样式 |
+| `public/settings.html` + `settings.js` + `settings.css` | 设置页：扫描根目录/深度/缓存/补丁上限、外部工具；端口与监听地址只读展示 |
 | `public/history.html` + `history.js` + `history.css` | 单文件历史页（独立标签页） |
 | `public/tree.html` + `tree.js` + `tree.css` | 完整文件树页（独立标签页），含右侧符号大纲 |
 | `public/compare.html` + `compare.js` + `compare.css` | 提交对比页（选两个变更集，树只列有变更的文件） |
@@ -118,10 +118,10 @@ journalctl --user -u wsl-worktree -n 50
 ## 测试
 
 - **纯逻辑**（`test/unit/`）：`node test/unit/test-*.mjs`，秒级，WSL/Linux 都能跑。
-- **接口级**：`bash test/api/test-api.sh`。它会在仓库根 `.test-run/` 下生成临时配置和仓库，在 7813 起一个隔离服务，依次跑 `test/api/` 下的 7 个脚本，结束后清理。不会碰 7801 上的生产服务。
+- **接口级**：`bash test/api/test-api.sh`。它会在仓库根 `.test-run/` 下生成临时配置和仓库，在 7813 起一个隔离服务，依次跑 `test/api/` 下的 8 个脚本（含会写配置的 `test-settings.mjs`），结束后清理。不会碰 7801 上的生产服务。
   - 单独跑某个脚本时：`BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test/api/test-ops.mjs`
   - 临时目录用 `WT_TEST_TMP`，不要再写死 `/tmp`；服务和测试进程可能不在同一个 mount namespace。
-- **UI 级**：`node test/ui/test-ui-settings.mjs` 已可在纯 Linux 跑（系统 Chrome + CDP，自动起隔离服务，验证设置页与平台菜单）。`test/ui/` 下其余脚本仍假设 Edge + `wsl.exe` + `jm_java`，尚未迁移；改 UI 时优先复用 `test-ui-settings.mjs` 的启动/清理方式，不要在单个脚本里再写死浏览器路径。
+- **UI 级**：`node test/ui/test-ui-settings.mjs` 已可在纯 Linux 跑（系统 Chrome + CDP，自动起隔离服务，验证设置页只读项/通用配置保存与平台菜单）。`test/ui/` 下其余脚本仍假设 Edge + `wsl.exe` + `jm_java`，尚未迁移；改 UI 时优先复用 `test-ui-settings.mjs` 的启动/清理方式，不要在单个脚本里再写死浏览器路径。
 - **`test/api/test-log-per-wt.mjs`** 只调 API，但依赖本机真实 `jm_java` 及其 worktree 存在，没有就跳过。
 
 测试脚本统一约定：

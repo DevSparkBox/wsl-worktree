@@ -4,7 +4,7 @@
 
 **打开：** http://localhost:7801
 
-外部工具路径可以在页面右上角「设置」里维护，也可以直接改 `config.json` 的 `apps`。
+扫描根目录、缓存、补丁上限和外部工具路径可以在页面右上角「设置」里维护；端口和监听地址只读，只能改 `config.json` 后重启。
 
 ---
 
@@ -1193,7 +1193,7 @@ wsl-worktree/
     ├── index.html          单页骨架
     ├── style.css           浅色主题
     ├── app.js              全部交互逻辑 + 对话框，零框架
-    ├── settings.html        设置页：外部工具路径
+    ├── settings.html        设置页：扫描/缓存/外部工具，只读端口与 host
     ├── settings.css         设置页样式
     ├── settings.js          设置页逻辑
     ├── fuzzy.js            模糊匹配（fuzzyScore / rankByFuzzy）
@@ -1239,7 +1239,7 @@ bash deploy.sh
 
 ```bash
 cp config.example.json config.json
-# 然后改 roots；外部程序可以在「设置」页里填，也可以直接改 apps
+# 改 roots（至少一个）；roots/深度/缓存/补丁上限/外部工具也能在「设置」页里改
 ```
 
 ```json
@@ -1258,9 +1258,12 @@ cp config.example.json config.json
 }
 ```
 
-- `roots`：扫描根目录，可加多个。支持 `~/codes`，会展开为当前用户家目录
-- `scanMaxDepth`：递归深度
+- `roots`：扫描根目录，至少一个（「设置」页最多 10 个）。支持 `~/codes`，会展开为当前用户家目录；不允许 `/`
+- `scanMaxDepth`：递归深度（「设置」页范围 1–12）
+- `stateCacheMs` / `scanCacheMs`：status 与仓库列表的缓存时间，0–60s / 0–600s
+- `maxPatchBytes`：单个 patch / 文件内容的字节上限，64 KiB–64 MiB
 - `host`：不写时纯 Linux 监听 `127.0.0.1`（只允许本机），WSL 监听 `0.0.0.0`（Windows 浏览器通常要通过这个地址访问 WSL 端口）。显式写在 config.json 里的值优先。即使监听 `0.0.0.0`，Host 也只接受 `localhost`、IP 字面量或配置里的主机名（防 DNS rebinding）；局域网访问请直接用 IP，注意暴露风险
+- `port` / `host` 是**只读项**，设置页只展示不写入；它们决定服务怎么监听，必须手改配置后重启
 - `apps`：三类外部程序。`command` 留空 = 自动检测；`args` 里 `{path}` 会替换成目标路径；`pathStyle` 为 `auto` / `native` / `windows`
   - WSL：`explorer.exe`、`wt.exe`、`code.cmd` 自动用 `\\wsl.localhost\<distro>\...`；Linux 原生程序用 `/home/...`
   - 纯 Linux：`xdg-open` / `dolphin` / `konsole` / `code` 都用原生路径
@@ -1269,13 +1272,24 @@ cp config.example.json config.json
 
 **没有 `config.json` 也能跑**：端口 7801、roots 为 `~/codes`、外部程序全自动检测；监听地址纯 Linux 默认 `127.0.0.1`，WSL 默认 `0.0.0.0`。
 
-改 `port` / `host` / `roots` 后要重启服务；外部程序在「设置」页保存后立即生效，不用重启。直接手改 `config.json` 后也需要重启。
+`roots` / `scanMaxDepth` / 缓存 / `maxPatchBytes` / `apps` 在「设置」页保存后**立即生效**；`port` / `host` 只能手改 `config.json`，**重启后生效**。直接手改 `config.json` 的其他字段也需要重启。
 
 ---
 
 ## 设置页
 
-右上角「设置」打开 `/settings.html`，维护三类外部程序：
+右上角「设置」打开 `/settings.html`，分四块：
+
+| 区块 | 字段 | 生效方式 |
+|---|---|---|
+| 扫描 | 根目录（至少一个，支持 `~/`，最多 10 个）、扫描深度 | 保存立即生效 |
+| 高级 | `stateCacheMs`、`scanCacheMs`、`maxPatchBytes` | 保存立即生效 |
+| 服务 | 端口、监听地址 | **只读**；手改 `config.json` 后重启 |
+| 外部工具 | 命令、参数、路径样式 | 保存立即生效 |
+
+页面顶部显示配置文件绝对路径；如果文件 JSON 坏了，会显示错误并禁用保存，后端也不会拿空对象覆盖用户的其他配置。
+
+外部工具字段的说明：
 
 | 字段 | 说明 |
 |---|---|
@@ -1283,7 +1297,7 @@ cp config.example.json config.json
 | 参数 | 一行一个，`{path}` 会替换成 worktree 路径；留空时按程序补默认参数 |
 | 路径样式 | `自动` / `Linux 原生路径` / `Windows UNC 路径` |
 
-保存走 `POST /api/settings`，只写回 `config.json` 的 `apps`，不碰 `port` / `host` / `roots`，所以**立即生效、不用重启**。设置页会显示当前平台和自动检测到的命令；检测不到时在卡片右上角给出原因。
+保存走 `POST /api/settings`，body 是 `{ apps?, config? }`：`config` 只接受 `roots` / `scanMaxDepth` / `stateCacheMs` / `scanCacheMs` / `maxPatchBytes`，传 `port` / `host` 会直接 400。保存后扫描缓存立即作废。设置页会显示当前平台和自动检测到的命令；检测不到时在卡片右上角给出原因。
 
 几个例子：
 
@@ -1341,8 +1355,8 @@ WSL 下如果填 Windows 程序（`explorer.exe`、`code.cmd`、`wt.exe`），`p
 | 端点 | 说明 |
 |---|---|
 | `GET /api/config` | 当前配置 + `platform`（`wsl` / `linux`）+ WSL 发行版名 |
-| `GET /api/settings` | 外部程序配置 + 自动检测结果（设置页用） |
-| `POST /api/settings` | `{apps:{fileManager,terminal,editor}}`，写回 `config.json`，只改 `apps` |
+| `GET /api/settings` | 已保存配置 + 运行中的值 + 外部程序自动检测结果 + 配置文件路径（设置页用） |
+| `POST /api/settings` | `{apps?, config?}`：`config` 只接受 `roots`/`scanMaxDepth`/`stateCacheMs`/`scanCacheMs`/`maxPatchBytes`；`port`/`host` 只读 |
 | `GET /api/repos[?force=1]` | 仓库列表 + worktree 计数 |
 | `GET /api/repos/:id/worktrees[?force=1]` | worktree 详情（含 status） |
 | `GET /api/repos/:id/log?rev=&skip=&count=&wt=` | 提交日志，`wt` 指定在哪个 worktree 里执行 |
@@ -1528,9 +1542,9 @@ node test/ui/test-ui-settings.mjs
 ```
 
 - `test/unit/test-open.mjs`：`lib/open.mjs` 的纯函数测试，覆盖 Linux 原生路径、WSL UNC、`code.cmd`、`wt.exe` 特殊参数、`{path}` 替换、非法路径样式。
-- `test/api/test-api.sh`：依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone`。临时目录用 `WT_TEST_TMP` 指定（默认在仓库根 `.test-run/`），不写死 `/tmp`（服务和测试进程可能不在同一个 mount namespace）。
+- `test/api/test-api.sh`：依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone` / `test-settings`。临时目录用 `WT_TEST_TMP` 指定（默认在仓库根 `.test-run/`），不写死 `/tmp`（服务和测试进程可能不在同一个 mount namespace）。
 - `test/api/test-log-per-wt.mjs` 只调 API，但依赖本机真实 `jm_java` 仓库和 worktree；没有就跳过。
-- `test/ui/test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页三类工具、保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
+- `test/ui/test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页只读端口/host、配置文件路径、通用配置与三类工具保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
 - **`test/ui/` 下其余脚本（`test-ui-*.mjs`、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、`test/ui/test-ui-settings.mjs` 和手工页面验证为准。
 - UI 脚本结束前断言 `window.__errs` 为空；布局类测试用 `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` 发真实事件。
 

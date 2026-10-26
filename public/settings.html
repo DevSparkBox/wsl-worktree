@@ -24,7 +24,62 @@
 
 <main class="settings-main">
   <div class="settings-head">
-    <h1>外部工具</h1>
+    <h1>设置</h1>
+    <p>扫描根目录、缓存和外部工具保存后立即生效。端口和监听地址是只读项，修改需要编辑配置文件并重启服务。</p>
+    <p class="settings-config-path">配置文件：<code id="settings-config-path"></code></p>
+  </div>
+
+  <div class="settings-notice" id="settings-notice" hidden></div>
+
+  <section class="settings-card">
+    <div class="settings-card-head">
+      <h2>扫描</h2>
+      <span class="settings-detected">至少保留一个根目录</span>
+    </div>
+    <p class="settings-hint">所有仓库都从这些目录递归查找；目录必须已存在，最多 10 个。支持 <code>~/codes</code> 写法，保存时保留原样。</p>
+    <label class="settings-field">
+      <span>根目录</span>
+      <textarea id="roots" rows="4" placeholder="/home/you/codes" spellcheck="false" autocomplete="off"></textarea>
+    </label>
+    <label class="settings-field">
+      <span>扫描深度</span>
+      <input id="scanMaxDepth" type="number" min="1" max="12" step="1" value="4">
+    </label>
+  </section>
+
+  <section class="settings-card settings-advanced">
+    <details>
+      <summary>高级 · 缓存与补丁上限</summary>
+      <p class="settings-hint">数字都是毫秒 / 字节。缓存设小会更实时但更慢；补丁上限决定 diff 和文件内容最多显示多少。</p>
+      <label class="settings-field">
+        <span>状态缓存</span>
+        <input id="stateCacheMs" type="number" min="0" max="60000" step="100" value="2000">
+      </label>
+      <label class="settings-field">
+        <span>扫描缓存</span>
+        <input id="scanCacheMs" type="number" min="0" max="600000" step="500" value="10000">
+      </label>
+      <label class="settings-field">
+        <span>补丁上限</span>
+        <input id="maxPatchBytes" type="number" min="65536" max="67108864" step="1024" value="2097152">
+      </label>
+    </details>
+  </section>
+
+  <section class="settings-card">
+    <div class="settings-card-head">
+      <h2>服务</h2>
+      <span class="badge warn" id="settings-restart-badge" hidden>需重启</span>
+    </div>
+    <p class="settings-hint">端口和监听地址只读：它们决定服务如何监听，也关系到写操作会不会暴露到局域网。修改请编辑上面的配置文件，然后执行 <code>systemctl --user restart wsl-worktree</code>。</p>
+    <div class="settings-readonly">
+      <div><span>端口</span><code id="settings-port"></code></div>
+      <div><span>监听地址</span><code id="settings-host"></code></div>
+    </div>
+  </section>
+
+  <div class="settings-group-head">
+    <h2>外部工具</h2>
     <p>配置「用 VS Code 打开 / 打开文件管理器 / 在终端中打开」实际调用的程序。命令只填可执行文件路径（参数写在「参数」里）；留空表示自动检测，检测不到时再手填绝对路径。</p>
   </div>
 

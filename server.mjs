@@ -3,7 +3,7 @@ import { isIP } from 'node:net'
 import { readFile, stat } from 'node:fs/promises'
 import { join, dirname, basename, extname, posix, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { loadConfig, saveApps } from './lib/config.mjs'
+import { loadConfig, saveSettings, readSavedConfig, expandRoots } from './lib/config.mjs'
 import { git, createLimiter } from './lib/git.mjs'
 import { scanRepos, parseWorktreePorcelainZ, parseStatusV2, suggestWorktreePath } from './lib/scan.mjs'
 import { parseNumstatZ } from './lib/numstat.mjs'
@@ -267,6 +267,39 @@ function checkRequest(req) {
   return null
 }
 
+// ---------- 设置页 ----------
+/**
+ * 设置页同时需要「磁盘上的值」和「当前进程真正在用的值」：
+ * port / host 只读，手改配置后必须重启，所以这两项可能不一致，要让页面能提示出来。
+ */
+async function settingsPayload() {
+  const saved = await readSavedConfig()
+  const effective = {
+    port: cfg.port,
+    host: cfg.host,
+    roots: cfg.roots,
+    scanMaxDepth: cfg.scanMaxDepth,
+    stateCacheMs: cfg.stateCacheMs,
+    scanCacheMs: cfg.scanCacheMs,
+    maxPatchBytes: cfg.maxPatchBytes,
+  }
+  const restartRequired = []
+  if (saved.config.port !== effective.port) restartRequired.push('port')
+  if (saved.config.host !== effective.host) restartRequired.push('host')
+
+  return {
+    platform: PLATFORM.platform,
+    distro: PLATFORM.distro,
+    apps: cfg.apps,
+    resolved: describeApps(cfg.apps, APP_CTX),
+    configPath: saved.path,
+    config: saved.config,
+    effective,
+    restartRequired,
+    configError: saved.error,
+  }
+}
+
 // ---------- HTTP ----------
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -335,35 +368,49 @@ const server = createServer(async (req, res) => {
       })
     }
 
-    // ---------- 设置：外部工具路径 ----------
-    // 只改 apps，不碰 port/host/roots 这些需要重启的字段
+    // ---------- 设置：扫描/缓存 + 外部工具路径 ----------
+    // port / host 只读：保存时明确拒绝，避免网页一键把写接口暴露到局域网
     if (p === '/api/settings') {
       if (req.method === 'GET') {
-        return json(res, 200, {
-          platform: PLATFORM.platform,
-          distro: PLATFORM.distro,
-          apps: cfg.apps,
-          resolved: describeApps(cfg.apps, APP_CTX),
-        })
+        return json(res, 200, await settingsPayload())
       }
       if (req.method === 'POST') {
         const body = await readBody(req)
-        const apps = normalizeApps(body.apps || {})
-        for (const [kind, app] of Object.entries(apps)) {
-          if (app.command.length > 1000 || /[\0\r\n]/.test(app.command)) {
-            return json(res, 400, { ok: false, error: `${kind} 的命令不合法` })
-          }
-          if (app.args.length > 32 || app.args.some((a) => a.length > 1000 || /[\0\r\n]/.test(a))) {
-            return json(res, 400, { ok: false, error: `${kind} 的参数不合法` })
+        const apps = body.apps === undefined ? undefined : normalizeApps(body.apps || {})
+
+        if (apps !== undefined) {
+          for (const [kind, app] of Object.entries(apps)) {
+            if (app.command.length > 1000 || /[\0\r\n]/.test(app.command)) {
+              return json(res, 400, { ok: false, field: `cmd-${kind}`, error: `${kind} 的命令不合法` })
+            }
+            if (app.args.length > 32 || app.args.some((a) => a.length > 1000 || /[\0\r\n]/.test(a))) {
+              return json(res, 400, { ok: false, field: `args-${kind}`, error: `${kind} 的参数不合法` })
+            }
           }
         }
+
+        let saved
         try {
-          cfg.apps = await saveApps(apps)
+          saved = await saveSettings({ apps, config: body.config })
         } catch (err) {
-          return json(res, 409, { ok: false, error: `写入配置失败：${err.message}` })
+          // 校验错带 field（前端能定位到输入框），读写文件失败或配置 JSON 坏了走 409
+          return json(res, err.field ? 400 : 409, { ok: false, field: err.field, error: err.message })
+        }
+
+        if (apps !== undefined) cfg.apps = saved.apps
+        if (body.config !== undefined) {
+          cfg.roots = expandRoots(saved.config.roots)
+          cfg.scanMaxDepth = saved.config.scanMaxDepth
+          cfg.stateCacheMs = saved.config.stateCacheMs
+          cfg.scanCacheMs = saved.config.scanCacheMs
+          cfg.maxPatchBytes = saved.config.maxPatchBytes
+          // roots / 深度变了，旧扫描结果立刻作废，否则页面看起来“保存了没反应”
+          scanCache = { at: 0, data: null }
+          stateCache.clear()
         }
         worktreePathCache = { at: 0, data: null }
-        return json(res, 200, { ok: true, apps: cfg.apps, resolved: describeApps(cfg.apps, APP_CTX) })
+
+        return json(res, 200, { ok: true, ...(await settingsPayload()) })
       }
       return json(res, 405, { ok: false, error: 'method not allowed' })
     }
