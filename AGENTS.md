@@ -69,6 +69,8 @@ journalctl --user -u wsl-worktree -n 50
 | `public/outline.js` | 符号大纲面板：渲染、跳转、本文件引用、滚动联动 |
 | `public/patch-view.js` | unified patch → 带行号表格（历史页 / 对比页共用） |
 | `public/splitter.js` | 左右分栏拖动（文件树页 / 对比页共用） |
+| `public/open-remote.js` | 远程打开（浏览器不在服务器上）的字符串构造：`vscode://` URI、ssh 命令、校验，纯函数 |
+| `public/clipboard.js` | 复制到剪贴板：安全上下文用 `navigator.clipboard`，否则 `execCommand` 兜底；**不要直接调 `navigator.clipboard`** |
 | `public/fuzzy.js` | 模糊匹配，主界面/历史页/文件树共用 |
 | `public/linkify.js` | commit message URL 转链接（协议白名单 + 转义） |
 | `public/tree-model.js` | 纯逻辑建树 + 单链目录压缩 |

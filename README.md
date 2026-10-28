@@ -1,6 +1,6 @@
 # Worktree — 浏览器版 git worktree 管理器
 
-浏览器里管理本机所有 git 仓库的 worktree。**WSL 和纯 Linux 用同一套代码**：WSL 下可以调 Windows 的 explorer.exe / wt.exe / code.cmd，纯 Linux 下用 xdg-open / Konsole / code；git 全程在本机执行，毫秒级；UI 是标准浏览器交互，不用学新快捷键。
+浏览器里管理本机所有 git 仓库的 worktree。**WSL 和纯 Linux 用同一套代码**：WSL 下可以调 Windows 的 explorer.exe / wt.exe / code.cmd，纯 Linux 下用 xdg-open / Konsole / code / zed；git 全程在本机执行，毫秒级；UI 是标准浏览器交互，不用学新快捷键。
 
 **打开：** http://localhost:7801
 
@@ -366,7 +366,7 @@ if (e.target.closest('a.ext-link')) return
 |---|---|
 | 跨仓库总览 | 左侧列表，按目录分组，显示 worktree 数徽章与脏标记 |
 | worktree 表格 | 分支、路径、改动文件数、ahead/behind、主/锁定/待清理徽章 |
-| 行内「更多」菜单 | VS Code / 资源管理器 / 终端 / 复制 UNC 路径 / 删除 worktree（红色，二次确认） |
+| 行内「更多」菜单 | VS Code / Zed / 资源管理器 / 终端 / 复制 UNC 路径 / 删除 worktree（红色，二次确认）；浏览器不在服务器上时换成远程打开，见「[远程访问](#远程访问浏览器不在服务器上)」 |
 | 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
 | 工单链接可点 | commit message 里的 http(s) URL 自动变链接，新标签页打开 |
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
@@ -1193,6 +1193,8 @@ wsl-worktree/
     ├── index.html          单页骨架
     ├── style.css           浅色主题
     ├── app.js              全部交互逻辑 + 对话框，零框架
+    ├── open-remote.js      远程打开（vscode:// URI / ssh 命令）的字符串构造，纯函数
+    ├── clipboard.js        复制到剪贴板（异步 API + execCommand 兜底），全站共用
     ├── settings.html        设置页：扫描/缓存/外部工具，只读端口与 host
     ├── settings.css         设置页样式
     ├── settings.js          设置页逻辑
@@ -1264,9 +1266,10 @@ cp config.example.json config.json
 - `maxPatchBytes`：单个 patch / 文件内容的字节上限，64 KiB–64 MiB
 - `host`：不写时纯 Linux 监听 `127.0.0.1`（只允许本机），WSL 监听 `0.0.0.0`（Windows 浏览器通常要通过这个地址访问 WSL 端口）。显式写在 config.json 里的值优先。即使监听 `0.0.0.0`，Host 也只接受 `localhost`、IP 字面量或配置里的主机名（防 DNS rebinding）；局域网访问请直接用 IP，注意暴露风险
 - `port` / `host` 是**只读项**，设置页只展示不写入；它们决定服务怎么监听，必须手改配置后重启
-- `apps`：三类外部程序。`command` 留空 = 自动检测；`args` 里 `{path}` 会替换成目标路径；`pathStyle` 为 `auto` / `native` / `windows`
+- `apps`：四类外部程序（文件管理器 / 终端 / 编辑器 / Zed）。`command` 留空 = 自动检测；`args` 里 `{path}` 会替换成目标路径；`pathStyle` 为 `auto` / `native` / `windows`
   - WSL：`explorer.exe`、`wt.exe`、`code.cmd` 自动用 `\\wsl.localhost\<distro>\...`；Linux 原生程序用 `/home/...`
-  - 纯 Linux：`xdg-open` / `dolphin` / `konsole` / `code` 都用原生路径
+  - 纯 Linux：`xdg-open` / `dolphin` / `konsole` / `code` / `zed` 都用原生路径
+  - Zed 单独一类（`apps.zed`）：留空会找 `zed` / `zeditor`，默认参数就是路径本身。只认 Linux 原生程序——Windows 版 `zed.exe` 接不了 WSL 路径，所以不做 Windows 侧检测
   - 终端留空时按命令自动补参数：Konsole `--workdir {path}`、GNOME Terminal `--working-directory {path}`、Windows Terminal 用 `wt -d <unc> wsl.exe -d <distro> --cd <path>`
 - 旧的 `windows.explorer` / `windows.wt` / `windows.code` 仍然能读：没有 `apps` 时会自动映射成 `fileManager` / `terminal` / `editor`
 
@@ -1306,6 +1309,7 @@ cp config.example.json config.json
   "apps": {
     "terminal": { "command": "/usr/bin/konsole", "args": ["--workdir", "{path}"], "pathStyle": "auto" },
     "editor": { "command": "/usr/bin/code", "args": [], "pathStyle": "auto" },
+    "zed": { "command": "/usr/bin/zed", "args": [], "pathStyle": "auto" },
     "fileManager": { "command": "", "args": [], "pathStyle": "auto" }
   }
 }
@@ -1323,9 +1327,60 @@ WSL 下如果填 Windows 程序（`explorer.exe`、`code.cmd`、`wt.exe`），`p
 | 文件管理器 | 优先 `explorer.exe`（UNC） | `xdg-open` / `dolphin` / `nautilus` / `thunar` |
 | 终端 | 优先 Windows Terminal（`wt -d <unc> wsl.exe --cd <path>`），也可用 Konsole 等 | `$TERMINAL` / Konsole / GNOME Terminal / kitty / alacritty / wezterm / foot / xterm |
 | 编辑器 | 原生 `code` 用 Linux 路径；Windows `code.cmd` 用 UNC | `code` / `codium` / `cursor`，原生路径 |
+| Zed | 原生 `zed`（要装在发行版内；Windows 版接不了 WSL 路径） | `zed` / `zeditor`，原生路径 |
 | 服务 | systemd user（发行版需启用 systemd），否则前台跑 | systemd user，`install.sh` 自动生成 unit |
 
 代码只在一个地方分支：`lib/open.mjs`。服务端和前端共用 `/api/config` 返回的 `platform` / `distro`；前端在纯 Linux 下隐藏「复制 Windows 路径」，只显示原生「复制路径」。
+
+---
+
+## 远程访问（浏览器不在服务器上）
+
+典型场景：浏览器开在 Windows 上，服务跑在另一台 Linux 上。这时点「用 VS Code 打开」，`/api/open` 拉起的是**那台 Linux 桌面上的** VS Code（或者干脆没有图形会话，进程直接退出），你在 Windows 这边什么都看不到。服务器没法替你启动另一台机器上的程序，这是浏览器沙箱的边界，不是配置问题。
+
+所以右上角有个「打开方式：本机 / 远程」：
+
+| 入口 | 本机（默认） | 远程 |
+|---|---|---|
+| VS Code | `POST /api/open` → 服务器上的 `code` | 跳转 `vscode://vscode-remote/ssh-remote+<SSH 目标><路径>`，由浏览器所在电脑的 VS Code + Remote-SSH 接管 |
+| Zed | 服务器上的 `zed` | 「复制 Zed 远程命令」→ `zed ssh://<SSH 目标><路径>` |
+| 终端 | 服务器上的终端 | 「复制 SSH 登录命令」→ `ssh -t <SSH 目标> 'cd "<路径>" && exec $SHELL'` |
+| 文件管理器 | 服务器上的文件管理器 | 不提供（Windows 资源管理器打不开 Linux 路径，除非另配 SMB） |
+
+**偏好只存在浏览器里**，不进 `config.json`：
+
+- `wsl-worktree.openMode`：`local` / `remote`
+- `wsl-worktree.openSshTarget`：`user@host`、`host`、`host:port`，或 `~/.ssh/config` 里的别名
+
+换浏览器 / 换电脑要重设——这是对的：它描述的是「这个浏览器在哪台机器上」，不是服务端的属性。服务端也不该去猜客户端 IP（loopback 判断在同机代理、NAT、容器转发下都不可靠）。
+
+几个实现上的取舍：
+
+- SSH 目标只允许 `[A-Za-z0-9_.@:-]`，因为它会被拼进 URI 和命令行，带空格分号引号一律拒绝，并在输入框下方标红说明。
+- VS Code 的 URI 是纯浏览器跳转，服务端无法知道有没有真的打开；协议没注册时浏览器自己会问一句。VS Code 那边要能用同一个名字 `ssh`（Remote-SSH 的 `ssh-remote+<名字>` 走的就是它）。
+- Zed 和终端只**复制命令**不执行：`zed ssh://` 的支持跟 Zed 版本有关，用户可以看清命令再决定回车。
+- 路径里出现引号、`$`、反斜杠时，SSH 命令退化成只登录（`ssh -t <目标>`），不拼 `cd`——PowerShell / bash / cmd 的转义规则不一致，给一条"看起来对但会 cd 到错地方"的命令更糟。
+- 远程模式下本地的那几项直接不显示，而不是点了才报错。
+
+### 为什么「复制命令」会失败（页面是 http://<IP>）
+
+`navigator.clipboard` **只在安全上下文里存在**：https 或 localhost 才有。从 Windows 打开 `http://192.168.x.x:7801` 时它不是"拒绝"，而是整个 `undefined`，直接 `undefined.writeText` 抛 TypeError。实测同一个页面：
+
+```
+http://127.0.0.1:7801/  → isSecureContext true,  navigator.clipboard 有
+http://10.20.57.6:7801/ → isSecureContext false, navigator.clipboard undefined
+```
+
+`public/clipboard.js` 的 `copyText()` 因此分两条路：
+
+1. 安全上下文 → `navigator.clipboard.writeText`
+2. 否则（或第 1 步抛错）→ 临时 `textarea` + `document.execCommand('copy')`。这个 API 已废弃，但在非安全上下文里仍然可用（已用真实鼠标手势在 `http://<LAN IP>:7801` 上实测返回 true）。
+
+两条都失败时**不会**把文本塞进 toast（toast 2 秒就消失，长命令根本看不清），而是弹一个已聚焦、已全选的只读文本框，让用户 Ctrl+C。
+
+页面继续用 http：给一个内网工具加证书的维护成本比这个兜底高。
+
+字符串拼装全在 `public/open-remote.js`（纯函数，无 DOM），主界面只负责按 `openMode` 换菜单项。
 
 ---
 
@@ -1376,7 +1431,7 @@ WSL 下如果填 Windows 程序（`explorer.exe`、`code.cmd`、`wt.exe`），`p
 | `GET /api/repos/:id/compare-file?a=&b=&path=&old=` | 单文件 patch；改名文件必须同时传 old |
 | `GET /api/repos/:id/refs-at?sha=&wt=` | 该提交上的 tag 与分支（annotated 会标记） |
 | `GET /api/repos/:id/files` | 全部已跟踪文件（git ls-files） |
-| `POST /api/open` | `{target:'fileManager'\|'terminal'\|'editor', path}`；兼容旧名 `explorer` / `wt` / `vscode`。`path` 必须是扫描结果里的 worktree |
+| `POST /api/open` | `{target:'fileManager'\|'terminal'\|'editor'\|'zed', path}`；兼容旧名 `explorer` / `wt` / `vscode`。`path` 必须是扫描结果里的 worktree |
 
 写操作（全部 `POST`，路径前缀 `/api/repos/:id/`）：
 
@@ -1541,10 +1596,12 @@ BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test/api/test-ops.mjs
 node test/ui/test-ui-settings.mjs
 ```
 
-- `test/unit/test-open.mjs`：`lib/open.mjs` 的纯函数测试，覆盖 Linux 原生路径、WSL UNC、`code.cmd`、`wt.exe` 特殊参数、`{path}` 替换、非法路径样式。
+- `test/unit/test-clipboard.mjs`：`public/clipboard.js` 的兜底逻辑，用假 window / document 覆盖安全上下文、非安全上下文、异步 API 抛错、两条通道都失败、没有 document。
+- `test/unit/test-open-remote.mjs`：`public/open-remote.js` 的纯函数测试，覆盖 SSH 目标校验（空串/空格/分号/超长）、VS Code URI 与中文路径编码、SSH 命令的引号退化、Zed 远程命令。
+- `test/unit/test-open.mjs`：`lib/open.mjs` 的纯函数测试，覆盖 Linux 原生路径、WSL UNC、`code.cmd`、`wt.exe` 特殊参数、Zed 默认参数、`{path}` 替换、非法路径样式。
 - `test/api/test-api.sh`：依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone` / `test-settings`。临时目录用 `WT_TEST_TMP` 指定（默认在仓库根 `.test-run/`），不写死 `/tmp`（服务和测试进程可能不在同一个 mount namespace）。
 - `test/api/test-log-per-wt.mjs` 只调 API，但依赖本机真实 `jm_java` 仓库和 worktree；没有就跳过。
-- `test/ui/test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页只读端口/host、配置文件路径、通用配置与三类工具保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
+- `test/ui/test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页只读端口/host、配置文件路径、通用配置与四类工具保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
 - **`test/ui/` 下其余脚本（`test-ui-*.mjs`、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、`test/ui/test-ui-settings.mjs` 和手工页面验证为准。
 - UI 脚本结束前断言 `window.__errs` 为空；布局类测试用 `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` 发真实事件。
 

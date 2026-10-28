@@ -8,6 +8,7 @@ import { buildTree, countFiles, displayChainName } from '/tree-model.js'
 import { initSplitter } from '/splitter.js'
 import { detectLang, highlightLines } from '/highlight.js'
 import { createOutline } from '/outline.js'
+import { copyText } from '/clipboard.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -874,12 +875,9 @@ $('t-hl').addEventListener('change', (e) => {
 
 $('t-btn-copy-path').addEventListener('click', async () => {
   if (!state.selected) return
-  try {
-    await navigator.clipboard.writeText(state.selected)
-    toast('已复制路径')
-  } catch {
-    toast('复制失败')
-  }
+  // 非安全上下文（http://<IP>:7801）没有 navigator.clipboard，copyText 会走 execCommand 兜底
+  if (await copyText(state.selected)) toast('已复制路径')
+  else toast('复制失败：浏览器不允许写剪贴板，请手动复制')
 })
 
 /**

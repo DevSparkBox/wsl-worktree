@@ -24,7 +24,8 @@ cat > "$TMP/config.json" <<EOF
   "apps": {
     "fileManager": { "command": "/bin/true", "args": [], "pathStyle": "auto" },
     "terminal": { "command": "/bin/true", "args": [], "pathStyle": "auto" },
-    "editor": { "command": "/bin/true", "args": [], "pathStyle": "auto" }
+    "editor": { "command": "/bin/true", "args": [], "pathStyle": "auto" },
+    "zed": { "command": "/bin/true", "args": [], "pathStyle": "auto" }
   }
 }
 EOF

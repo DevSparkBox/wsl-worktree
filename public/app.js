@@ -1,6 +1,8 @@
 // Worktree — 浏览器客户端（WSL / Linux 共用）
 import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
 import { linkify } from '/linkify.js'
+import { validSshTarget, vscodeRemoteUri, sshCommand, zedRemoteCommand } from '/open-remote.js'
+import { copyText } from '/clipboard.js'
 const $ = (id) => document.getElementById(id)
 const state = {
   repos: [],
@@ -19,6 +21,8 @@ const state = {
   pending: null,       // 当前 worktree 的未提交改动摘要 { count, add, del, untracked, wt }
   selectedFile: null,
   detailFiles: [],
+  openMode: 'local',   // 浏览器端偏好：「打开」按钮调哪台机器的程序（local 本机 / remote 远程）
+  openSsh: '',         // 远程模式的 SSH 目标（user@host 或 ~/.ssh/config 别名）
 }
 
 const fmtTime = (ms) => {
@@ -45,6 +49,37 @@ function toast(msg, isErr = false) {
   el.hidden = false
   clearTimeout(toastTimer)
   toastTimer = setTimeout(() => { el.hidden = true }, isErr ? 6000 : 2200)
+}
+
+/**
+ * 复制文本并按结果给反馈。
+ * 失败时不把文本塞进 toast：toast 2 秒就消失，SSH 命令那么长根本看不清，
+ * 所以改成弹一个已全选的只读文本框，用户自己按 Ctrl+C。
+ */
+async function copyOrShow(text, okMsg) {
+  if (await copyText(text)) {
+    toast(okMsg)
+    return
+  }
+  showCopyDialog(text)
+}
+
+function showCopyDialog(text) {
+  const body = document.createElement('div')
+  body.innerHTML = `
+    <div class="field">
+      <label>浏览器不允许自动写剪贴板</label>
+      <textarea class="textarea" id="copy-manual" rows="4" readonly spellcheck="false"></textarea>
+      <div class="hintline">文本已全选，直接按 Ctrl+C 复制。常见原因：页面是 <code>http://&lt;IP&gt;:7801</code> 这种非安全上下文（只有 https 和 localhost 才有 <code>navigator.clipboard</code>）。</div>
+    </div>`
+  const ta = body.querySelector('#copy-manual')
+  ta.value = text
+  openModal({
+    title: '手动复制',
+    body,
+    buttons: [{ label: '关闭' }],
+    onMount: () => { ta.focus(); ta.select() },
+  })
 }
 
 async function api(path, opts) {
@@ -338,8 +373,112 @@ const ROW_ICONS = {
   folder: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.3c.4 0 .8.2 1 .5l.7 1h5A1.5 1.5 0 0 1 14 6v6a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 12V4.5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>',
   terminal: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M4.6 6.4L6.6 8l-2 1.6M8.4 10h3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   vscode: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M11.3 2.2L5.6 7.4 3.4 5.7 2 6.4v3.2l1.4.7 2.2-1.7 5.7 5.2 2.7-1.3V3.5l-2.7-1.3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M11.3 5.2v5.6" stroke="currentColor" stroke-width="1.2"/></svg>',
+  zed: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.6 4h8.8l-8.8 8h8.8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   trash: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.2a1 1 0 0 0 1 .8h3.8a1 1 0 0 0 1-.8l.6-8.2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 }
+
+// ---------- 打开方式：本机 / 远程 ----------
+// 浏览器在 Windows、服务在另一台 Linux 时，`/api/open` 启动的程序只会出现在
+// 那台 Linux 的桌面上。所以这里让用户自己声明「浏览器在哪台机器」，
+// 远程模式改用 vscode:// 协议和「复制命令」，完全不经过服务端。
+// 偏好只记在 localStorage：它描述的是这台浏览器，不是服务端配置。
+const OPEN_MODE_KEY = 'wsl-worktree.openMode'
+const OPEN_SSH_KEY = 'wsl-worktree.openSshTarget'
+
+function readPref(key) {
+  try { return localStorage.getItem(key) || '' } catch { return '' }
+}
+
+function writePref(key, value) {
+  try { localStorage.setItem(key, value) } catch {}
+}
+
+state.openMode = readPref(OPEN_MODE_KEY) === 'remote' ? 'remote' : 'local'
+state.openSsh = readPref(OPEN_SSH_KEY)
+
+function renderOpenMode() {
+  const btn = $('btn-open-mode')
+  const remote = state.openMode === 'remote'
+  btn.textContent = `打开方式：${remote ? '远程' : '本机'}`
+  btn.title = remote
+    ? `VS Code / Zed / 终端在浏览器所在的电脑上打开（SSH ${state.openSsh || '未设置'}）`
+    : '这些按钮调用这台服务器上的程序；浏览器不在服务器上时切到「远程」'
+  btn.classList.toggle('remote', remote)
+}
+
+function setOpenMode(mode) {
+  state.openMode = mode === 'remote' ? 'remote' : 'local'
+  writePref(OPEN_MODE_KEY, state.openMode)
+  renderOpenMode()
+  toast(state.openMode === 'remote' ? '打开方式：远程（我的电脑，走 SSH）' : '打开方式：本机（服务器桌面）')
+}
+
+function openRemoteDialog() {
+  const body = document.createElement('div')
+  body.innerHTML = `
+    <div class="field">
+      <label>SSH 主机</label>
+      <input class="input" id="remote-ssh" value="${esc(state.openSsh)}" placeholder="user@192.168.1.9 或 ~/.ssh/config 里的别名" autocomplete="off" spellcheck="false">
+      <div class="hintline" id="remote-hint">这台电脑上 <code>ssh</code> 能直接用的名字。VS Code 用同一个名字走 Remote-SSH，命令里的 ssh 也用它。</div>
+    </div>`
+
+  const input = body.querySelector('#remote-ssh')
+  const hint = body.querySelector('#remote-hint')
+  const HINT = hint.textContent
+
+  input.addEventListener('input', () => {
+    hint.textContent = HINT
+    hint.classList.remove('err')
+  })
+
+  return openModal({
+    title: '远程打开设置',
+    body,
+    buttons: [
+      { label: '取消' },
+      {
+        label: '保存',
+        kind: 'primary',
+        onClick: () => {
+          const v = input.value.trim()
+          if (!validSshTarget(v)) {
+            hint.textContent = '只能填 ssh 能直接用的目标：字母、数字和 . _ - @ :，不要带空格或引号'
+            hint.classList.add('err')
+            input.focus()
+            return false
+          }
+          state.openSsh = v
+          writePref(OPEN_SSH_KEY, v)
+          renderOpenMode()
+          return true
+        },
+      },
+    ],
+  })
+}
+
+$('btn-open-mode').addEventListener('click', (e) => {
+  const mark = (v) => (state.openMode === v ? '✓  ' : '')
+  openRowMenu(e.currentTarget, [
+    {
+      label: `${mark('local')}本机（服务器桌面）`,
+      onClick: () => setOpenMode('local'),
+    },
+    {
+      label: `${mark('remote')}远程（我的电脑，走 SSH）`,
+      onClick: () => {
+        // 远程必须知道连哪台机器，没配过就直接弹配置框
+        const needTarget = !state.openSsh
+        setOpenMode('remote')
+        if (needTarget) openRemoteDialog()
+      },
+    },
+    { sep: true },
+    { label: '设置 SSH 主机…', onClick: () => openRemoteDialog() },
+  ])
+})
+
+renderOpenMode()
 
 let rowMenuEl = null
 
@@ -433,6 +572,46 @@ function buildWtMenu(wt) {
     }
   }
 
+  const remote = state.openMode === 'remote'
+  /** 远程模式：没配 SSH 目标就先弹配置，别让点下去只得到一条报错 */
+  const withTarget = (fn) => () => {
+    if (!state.openSsh) {
+      toast('先设置 SSH 主机，例如 user@192.168.1.9', true)
+      openRemoteDialog()
+      return
+    }
+    fn(state.openSsh)
+  }
+
+  // 远程模式没有文件管理器：Windows 的资源管理器打不开 Linux 目录（除非另外配了 SMB）
+  const openItems = remote
+    ? [
+        {
+          icon: ROW_ICONS.vscode,
+          label: '用 VS Code 远程打开',
+          onClick: withTarget((ssh) => {
+            // 自定义协议交给浏览器所在电脑处理，成功与否这边观察不到
+            location.href = vscodeRemoteUri(ssh, wt.path)
+          }),
+        },
+        {
+          icon: ROW_ICONS.zed,
+          label: '复制 Zed 远程命令',
+          onClick: withTarget((ssh) => copyOrShow(zedRemoteCommand(ssh, wt.path), '已复制 Zed 远程命令')),
+        },
+        {
+          icon: ROW_ICONS.terminal,
+          label: '复制 SSH 登录命令',
+          onClick: withTarget((ssh) => copyOrShow(sshCommand(ssh, wt.path), '已复制 SSH 登录命令')),
+        },
+      ]
+    : [
+        { icon: ROW_ICONS.vscode, label: '用 VS Code 打开', onClick: openTo('vscode') },
+        { icon: ROW_ICONS.zed, label: '用 Zed 打开', onClick: openTo('zed') },
+        { icon: ROW_ICONS.folder, label: '打开文件管理器', onClick: openTo('explorer') },
+        { icon: ROW_ICONS.terminal, label: '在终端中打开', onClick: openTo('wt') },
+      ]
+
   return [
     {
       icon: ROW_ICONS.branch,
@@ -449,35 +628,20 @@ function buildWtMenu(wt) {
       onClick: () => openPullDialog(wt),
     },
     { sep: true },
-    { icon: ROW_ICONS.vscode, label: '用 VS Code 打开', onClick: openTo('vscode') },
-    { icon: ROW_ICONS.folder, label: '打开文件管理器', onClick: openTo('explorer') },
-    { icon: ROW_ICONS.terminal, label: '在终端中打开', onClick: openTo('wt') },
+    ...openItems,
     { sep: true },
     {
       icon: ROW_ICONS.folder,
       label: '复制路径',
-      onClick: async () => {
-        try {
-          await navigator.clipboard.writeText(wt.path)
-          toast('已复制路径')
-        } catch {
-          toast(wt.path)
-        }
-      },
+      onClick: () => copyOrShow(wt.path, '已复制路径'),
     },
     // UNC 只在 WSL 下有意义；纯 Linux 隐藏，避免误导
     ...(state.platform === 'wsl' && state.distro
       ? [{
           icon: ROW_ICONS.folder,
           label: '复制 Windows 路径',
-          onClick: async () => {
-            const unc = `\\\\wsl.localhost\\${state.distro}${wt.path.replace(/\//g, '\\')}`
-            try {
-              await navigator.clipboard.writeText(unc)
-              toast('已复制 Windows 路径')
-            } catch {
-              toast(unc)
-            }
+          onClick: () => {
+            copyOrShow(`\\\\wsl.localhost\\${state.distro}${wt.path.replace(/\//g, '\\')}`, '已复制 Windows 路径')
           },
         }]
       : []),
@@ -508,12 +672,7 @@ $('wt-body').addEventListener('click', async (e) => {
   if (act === 'pull') return openPullDialog(wt)
   if (act === 'remove') return openRemoveDialog(wt)
   if (act === 'copy') {
-    try {
-      await navigator.clipboard.writeText(path)
-      toast('已复制路径')
-    } catch {
-      toast(path)
-    }
+    await copyOrShow(path, '已复制路径')
     return
   }
   try {

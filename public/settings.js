@@ -20,6 +20,11 @@ const KINDS = [
     label: '编辑器',
     hint: '留空会依次找 code / codium / cursor。WSL 下 Windows 的 code.cmd 会自动使用 UNC 路径；原生 code 使用 Linux 路径。',
   },
+  {
+    key: 'zed',
+    label: 'Zed',
+    hint: '留空会找 zed / zeditor。Zed 是 Linux 原生程序，默认参数就是路径本身；不认 Windows 的 zed.exe，WSL 里请用装在发行版内的 zed。',
+  },
 ]
 
 const STYLES = [

@@ -7,6 +7,7 @@
 import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
 import { linkify } from '/linkify.js'
 import { renderPatchTable } from '/patch-view.js'
+import { copyText } from '/clipboard.js'
 
 const $ = (id) => document.getElementById(id)
 
@@ -274,12 +275,9 @@ $('h-follow').addEventListener('change', (e) => {
 
 $('h-copy-sha').addEventListener('click', async () => {
   if (!state.activeSha) return
-  try {
-    await navigator.clipboard.writeText(state.activeSha)
-    toast('已复制 sha')
-  } catch {
-    toast('复制失败，请手动选择')
-  }
+  // 非安全上下文（http://<IP>:7801）没有 navigator.clipboard，copyText 会走 execCommand 兜底
+  if (await copyText(state.activeSha)) toast('已复制 sha')
+  else toast('复制失败：浏览器不允许写剪贴板，请手动选择')
 })
 
 // 列表宽度拖动

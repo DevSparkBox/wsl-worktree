@@ -171,7 +171,9 @@ try {
   const platform = await ev(`document.getElementById('settings-platform').textContent`)
   check('设置页显示平台', /Linux/.test(platform.value || ''), platform.value)
   const cards = await ev(`document.querySelectorAll('.settings-card').length`)
-  check('设置卡片数量', cards.value === 6, `${cards.value} 张`)
+  check('设置卡片数量', cards.value === 7, `${cards.value} 张`)
+  const zedCard = await ev(`!!document.getElementById('cmd-zed')`)
+  check('外部工具有 Zed 卡片', zedCard.value === true, String(zedCard.value))
   const configPath = await ev(`document.getElementById('settings-config-path').textContent`)
   check('显示配置文件路径', configPath.value === CONFIG, configPath.value)
 
@@ -226,7 +228,97 @@ try {
   const labels = await ev(`[...document.querySelectorAll('.row-menu .rmi-label')].map(x => x.textContent)`)
   check('菜单有原生复制路径', (labels.value || []).includes('复制路径'), JSON.stringify(labels.value))
   check('纯 Linux 不显示 Windows 路径', !(labels.value || []).includes('复制 Windows 路径'), JSON.stringify(labels.value))
-  check('菜单有文件管理器/终端/编辑器', ['打开文件管理器', '在终端中打开', '用 VS Code 打开'].every((x) => (labels.value || []).includes(x)), '')
+  check('菜单有文件管理器/终端/编辑器', ['打开文件管理器', '在终端中打开', '用 VS Code 打开', '用 Zed 打开'].every((x) => (labels.value || []).includes(x)), '')
+
+  // ---------- 打开方式：本机 / 远程（偏好只留在浏览器里） ----------
+  const modeText = await ev(`document.getElementById('btn-open-mode').textContent`)
+  check('默认打开方式是本机', /本机/.test(modeText.value || ''), modeText.value)
+
+  await ev(`document.getElementById('btn-open-mode').click()`)
+  await waitFor(`document.querySelector('.row-menu')`)
+  const modeItems = await ev(`[...document.querySelectorAll('.row-menu .rmi-label')].map(x => x.textContent)`)
+  check('打开方式菜单有本机/远程', ['本机（服务器桌面）', '远程（我的电脑，走 SSH）'].every((x) => (modeItems.value || []).some((t) => t.includes(x))), JSON.stringify(modeItems.value))
+
+  // 没配过 SSH 主机，选远程应该直接弹配置框
+  await ev(`[...document.querySelectorAll('.row-menu .rmi-label')].find(x => x.textContent.includes('远程（'))?.click()`)
+  check('远程模式自动弹 SSH 配置', await waitFor(`document.getElementById('remote-ssh')`), '')
+
+  await ev(`(() => {
+    document.getElementById('remote-ssh').value = 'user@ho st'
+    document.querySelector('#modal-foot .btn.primary').click()
+  })()`)
+  const badHint = await ev(`(() => {
+    const h = document.getElementById('remote-hint')
+    return { err: h.classList.contains('err'), text: h.textContent, open: !document.getElementById('modal').hidden }
+  })()`)
+  check('非法 SSH 主机被拦下', badHint.value?.err === true && badHint.value?.open === true, JSON.stringify(badHint.value))
+
+  await ev(`(() => {
+    document.getElementById('remote-ssh').value = 'tester@10.0.0.5'
+    document.querySelector('#modal-foot .btn.primary').click()
+  })()`)
+  await waitFor(`document.getElementById('modal').hidden`)
+  const modeAfter = await ev(`document.getElementById('btn-open-mode').textContent`)
+  check('切到远程后按钮显示远程', /远程/.test(modeAfter.value || ''), modeAfter.value)
+
+  await ev(`document.querySelector('#wt-body tr[data-path] [data-act="menu"]')?.click()`)
+  await waitFor(`document.querySelector('.row-menu')`)
+  const remoteLabels = await ev(`[...document.querySelectorAll('.row-menu .rmi-label')].map(x => x.textContent)`)
+  check('远程菜单换成协议/复制命令', ['用 VS Code 远程打开', '复制 Zed 远程命令', '复制 SSH 登录命令'].every((x) => (remoteLabels.value || []).includes(x)), JSON.stringify(remoteLabels.value))
+  check('远程菜单不再有本地打开项', ['在终端中打开', '打开文件管理器'].every((x) => !(remoteLabels.value || []).includes(x)), JSON.stringify(remoteLabels.value))
+  check('远程不显示本地 VS Code 项', !(remoteLabels.value || []).includes('用 VS Code 打开'), '')
+
+  // ---- 复制：浏览器访问 http://<IP>:7801 时不是安全上下文，navigator.clipboard 不存在 ----
+  await ev(`(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true })
+    document.execCommand = () => true
+  })()`)
+  const clickRowAction = async (label) => {
+    await ev(`document.querySelector('#wt-body tr[data-path] [data-act="menu"]')?.click()`)
+    await waitFor(`document.querySelector('.row-menu')`)
+    await ev(`[...document.querySelectorAll('.row-menu .rmi-label')].find(x => x.textContent === ${JSON.stringify(label)})?.click()`)
+    await sleep(150)
+  }
+
+  await clickRowAction('复制 SSH 登录命令')
+  const legacyToast = await ev(`(() => { const t = document.getElementById('toast'); return { text: t.textContent, hidden: t.hidden } })()`)
+  check('无 clipboard 时用 execCommand 兜底', legacyToast.value?.hidden === false && legacyToast.value?.text === '已复制 SSH 登录命令', JSON.stringify(legacyToast.value))
+
+  // 两条通道都失败：必须弹「手动复制」框，而不是 2 秒就消失的 toast
+  await ev(`document.execCommand = () => false`)
+  await clickRowAction('复制 SSH 登录命令')
+  const manual = await waitFor(`document.getElementById('copy-manual')`) && await ev(`({
+    value: document.getElementById('copy-manual').value,
+    title: document.getElementById('modal-title').textContent,
+    focused: document.activeElement === document.getElementById('copy-manual'),
+  })`)
+  check('都失败时弹手动复制框', /^ssh -t tester@10\.0\.0\.5 'cd ".+\/repos\/demo" && exec \$SHELL'$/.test(manual.value?.value || ''), JSON.stringify(manual.value?.value))
+  check('手动复制框已聚焦并全选', manual.value?.focused === true && manual.value?.title === '手动复制', JSON.stringify(manual.value))
+  await ev(`document.getElementById('modal-close').click()`)
+  await waitFor(`document.getElementById('modal').hidden`)
+
+  const stored = await ev(`({ mode: localStorage.getItem('wsl-worktree.openMode'), ssh: localStorage.getItem('wsl-worktree.openSshTarget') })`)
+  check('偏好写进浏览器 localStorage', stored.value?.mode === 'remote' && stored.value?.ssh === 'tester@10.0.0.5', JSON.stringify(stored.value))
+
+  const cfgWithMode = JSON.parse(readFileSync(CONFIG, 'utf8'))
+  check('打开方式没写进服务端配置', cfgWithMode.openMode === undefined && cfgWithMode.openSshTarget === undefined, Object.keys(cfgWithMode).join(','))
+
+  // 刷新后仍然是远程（偏好跟着浏览器走）
+  await send('Page.navigate', { url: `http://127.0.0.1:${PORT}/` })
+  await waitFor(`document.getElementById('btn-open-mode')`)
+  const modeReload = await ev(`document.getElementById('btn-open-mode').textContent`)
+  check('刷新后保持远程', /远程/.test(modeReload.value || ''), modeReload.value)
+
+  // 切回本机，菜单恢复
+  await ev(`document.getElementById('btn-open-mode').click()`)
+  await waitFor(`document.querySelector('.row-menu')`)
+  await ev(`[...document.querySelectorAll('.row-menu .rmi-label')].find(x => x.textContent.includes('本机'))?.click()`)
+  await waitFor(`document.querySelectorAll('#wt-body tr[data-path]').length > 0`)
+  await ev(`document.querySelector('#wt-body tr[data-path] [data-act="menu"]')?.click()`)
+  await waitFor(`document.querySelector('.row-menu')`)
+  const backLabels = await ev(`[...document.querySelectorAll('.row-menu .rmi-label')].map(x => x.textContent)`)
+  check('切回本机后菜单恢复', (backLabels.value || []).includes('在终端中打开') && (backLabels.value || []).includes('用 VS Code 打开'), JSON.stringify(backLabels.value))
+
   const errs = await ev(`window.__errs`)
   check('页面无 JS 错误', Array.isArray(errs.value) && errs.value.length === 0, JSON.stringify(errs.value))
   await shot('ui-settings-linux.png')

@@ -8,6 +8,7 @@
   "apps": {
     "fileManager": { "command": "", "args": [], "pathStyle": "auto" },
     "terminal": { "command": "", "args": [], "pathStyle": "auto" },
-    "editor": { "command": "", "args": [], "pathStyle": "auto" }
+    "editor": { "command": "", "args": [], "pathStyle": "auto" },
+    "zed": { "command": "", "args": [], "pathStyle": "auto" }
   }
 }

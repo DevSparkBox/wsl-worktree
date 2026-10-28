@@ -87,12 +87,34 @@ check('isWsl 默认 Linux', isWsl({}) === false || process.env.WSL_DISTRO_NAME, 
 const stringApp = normalizeApps({ editor: '/usr/bin/code' })
 check('字符串写法归一化', stringApp.editor.command === '/usr/bin/code' && stringApp.editor.pathStyle === 'auto', JSON.stringify(stringApp.editor))
 
+const emptyApps = normalizeApps({})
+check('未配置时 zed 有默认空项', emptyApps.zed?.command === '' && Array.isArray(emptyApps.zed.args) && emptyApps.zed.pathStyle === 'auto', JSON.stringify(emptyApps.zed))
+
+const zed = buildLaunch(
+  normalizeApps({ zed: { command: '/usr/bin/zed', args: [], pathStyle: 'auto' } }),
+  'zed',
+  '/home/u/codes/repo',
+  linux
+)
+check('Zed 默认只传路径', zed.command === '/usr/bin/zed' && JSON.stringify(zed.args) === JSON.stringify(['/home/u/codes/repo']), JSON.stringify(zed))
+
+const zedWsl = buildLaunch(
+  normalizeApps({ zed: { command: '/usr/bin/zed', args: [], pathStyle: 'auto' } }),
+  'zed',
+  '/home/u/codes/repo',
+  wsl
+)
+check('WSL 下的原生 zed 保留 Linux 路径', zedWsl.args[0] === '/home/u/codes/repo', JSON.stringify(zedWsl))
+
 // 自动检测依赖 PATH；临时清空，模拟“什么都没装”的机器
 const oldPath = process.env.PATH
 process.env.PATH = '/nonexistent-path-for-test'
 try {
   const noEditor = resolveApp(normalizeApps({ editor: { command: '' } }), 'editor', linux)
   check('找不到编辑器时报中文错误', Boolean(noEditor.error) && /编辑器/.test(noEditor.error), noEditor.error || '')
+
+  const noZed = resolveApp(normalizeApps({}), 'zed', linux)
+  check('找不到 Zed 时报中文错误', Boolean(noZed.error) && /Zed/.test(noZed.error), noZed.error || '')
 
   const missingPath = buildLaunch(
     normalizeApps({ editor: { command: '', args: [], pathStyle: 'auto' } }),

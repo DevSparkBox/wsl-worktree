@@ -859,6 +859,7 @@ const server = createServer(async (req, res) => {
         terminal: 'terminal',
         vscode: 'editor',
         editor: 'editor',
+        zed: 'zed',
       }[target]
       if (!kind) return json(res, 400, { ok: false, error: 'unknown target' })
 
