@@ -297,6 +297,8 @@ if (e.target.closest('a.ext-link')) return
 - 监听 `hashchange`：手改地址栏 hash 或从收藏夹进入时也会切换。
 - 左侧列表、顶栏切换器、hashchange 三个入口最终都走 `selectRepo`，写入逻辑只在这一处，不会出现某个入口忘记记录。
 
+日志区「当前在哪个 worktree / 分支上看历史」也按仓库记在 localStorage，刷新后恢复，见「[查看指定 worktree 的提交日志](#查看指定-worktree-的提交日志)」。
+
 ### 窄宽度下的排版
 
 窗口变窄时有两处容易出问题，都已处理：
@@ -367,7 +369,7 @@ if (e.target.closest('a.ext-link')) return
 | 跨仓库总览 | 左侧列表，按目录分组，显示 worktree 数徽章与脏标记 |
 | worktree 表格 | 分支、路径、改动文件数、ahead/behind、主/锁定/待清理徽章 |
 | 行内「更多」菜单 | VS Code / Zed / 资源管理器 / 终端 / 复制 UNC 路径 / 删除 worktree（红色，二次确认）；浏览器不在服务器上时换成远程打开，见「[远程访问](#远程访问浏览器不在服务器上)」 |
-| 提交日志 | 分页 200 条；**可按 worktree 切换**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
+| 提交日志 | 分页 200 条，**滚动到底自动加载**；右上角图标刷新；**点分支名或下拉框切换 worktree**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
 | 工单链接可点 | commit message 里的 http(s) URL 自动变链接，新标签页打开 |
 | 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
 | 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
@@ -1106,8 +1108,12 @@ jm_net   候选 2 个（都是 detached，闲置 32 天 / 9 天，均 suggest=tr
 有三种方式，效果等价：
 
 1. **顶部下拉框** `提交日志` 左边 —— 列出该仓库全部 worktree（带 `· 主` 标记和 `· N改` 脏文件数）
-2. **双击 worktree 表格里的任意一行** —— 直接把日志切到那个 worktree，该行左侧出现蓝色竖条
+2. **点击 worktree 表格里的分支名** —— 直接把日志切到那个 worktree，该行出现蓝色竖条；双击行不再触发切换
 3. **URL 参数**：`GET /api/repos/:id/log?rev=HEAD&wt=<worktree 绝对路径>`
+
+选过的 worktree 会记在浏览器里（localStorage key `wsl-worktree.logWt`，按仓库各存一份），刷新或重开标签页后自动恢复。恢复时**先按分支名匹配，再按目录兜底** —— worktree 删掉重建目录会变，分支才是用户想看的那个；两者都匹配不上时回退主工作树。
+
+日志区右上角的**刷新图标**（hover 有提示）重新拉取当前 worktree 的日志和未提交改动摘要。翻页没有按钮：滚到列表底部再继续滚，会自动加载下一页，直到某页不足 200 条为止。
 
 右上角的灰色小字会显示当前的 git 工作目录（`~/codes/jm_java-worktrees/xxx`），用来确认看的是哪个。
 
@@ -1585,6 +1591,7 @@ node test/unit/test-linkify.mjs
 node test/unit/test-symbols.mjs
 node test/unit/test-open.mjs
 node test/unit/test-config.mjs
+node test/unit/test-log-wt.mjs
 
 # 接口级：自带隔离服务（7813）+ 临时仓库，跑完自动清理
 bash test/api/test-api.sh
@@ -1592,8 +1599,9 @@ bash test/api/test-api.sh
 # 只跑某一组接口测试（先按 test-api.sh 的方式起服务，临时目录仍在仓库根的 .test-run）
 BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test/api/test-ops.mjs
 
-# Linux UI 冒烟：设置页保存 + 主界面菜单（系统 Chrome，零依赖）
+# Linux UI 冒烟：设置页保存 + 主界面菜单，以及日志切换/记忆/滚动加载（系统 Chrome，零依赖）
 node test/ui/test-ui-settings.mjs
+node test/ui/test-ui-log-switch.mjs
 ```
 
 - `test/unit/test-clipboard.mjs`：`public/clipboard.js` 的兜底逻辑，用假 window / document 覆盖安全上下文、非安全上下文、异步 API 抛错、两条通道都失败、没有 document。
@@ -1601,8 +1609,10 @@ node test/ui/test-ui-settings.mjs
 - `test/unit/test-open.mjs`：`lib/open.mjs` 的纯函数测试，覆盖 Linux 原生路径、WSL UNC、`code.cmd`、`wt.exe` 特殊参数、Zed 默认参数、`{path}` 替换、非法路径样式。
 - `test/api/test-api.sh`：依次跑 `test-ops` / `test-file-history` / `test-fetch-tag` / `test-tag-create` / `test-checkout-tag` / `test-pending` / `test-clone` / `test-settings`。临时目录用 `WT_TEST_TMP` 指定（默认在仓库根 `.test-run/`），不写死 `/tmp`（服务和测试进程可能不在同一个 mount namespace）。
 - `test/api/test-log-per-wt.mjs` 只调 API，但依赖本机真实 `jm_java` 仓库和 worktree；没有就跳过。
-- `test/ui/test-ui-settings.mjs` 是新的纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页只读端口/host、配置文件路径、通用配置与四类工具保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
-- **`test/ui/` 下其余脚本（`test-ui-*.mjs`、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、`test/ui/test-ui-settings.mjs` 和手工页面验证为准。
+- `test/ui/test-ui-settings.mjs` 是纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页只读端口/host、配置文件路径、通用配置与四类工具保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
+- `test/ui/test-ui-log-switch.mjs` 也是纯 Linux UI 测试：造 450 个提交 + 一个 feat worktree，验证点分支名切换日志、双击不再切换、刷新后恢复记住的分支、刷新按钮拉到新 HEAD、滚到底自动翻页。同样支持 `CHROME` / `UI_PORT` / `CDP_PORT`。
+- `test/unit/test-log-wt.mjs`：`public/log-wt.js` 的纯函数测试，覆盖按分支优先/目录兜底、detached、失效 worktree 回退。
+- **`test/ui/` 下的旧脚本（`test-ui.mjs` 等、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、上面两个 `test-ui-*.mjs` 和手工页面验证为准。
 - UI 脚本结束前断言 `window.__errs` 为空；布局类测试用 `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` 发真实事件。
 
 ## 下一步

@@ -129,23 +129,25 @@ const wt2Meta = await evaluate(`document.getElementById('log-meta').textContent`
 checks.push(['切换后 cwd 变化', wt2Meta.value !== mainMeta.value, wt2Meta.value])
 checks.push(['切换后历史不同', wt2FirstSha.value !== mainFirstSha.value, `${mainFirstSha.value?.slice(0,8)} → ${wt2FirstSha.value?.slice(0,8)}`])
 
-// 双击 worktree 行切换
+// 点击 worktree 行里的分支名切换
 // 不能固定 rows[2]：worktree 数量随使用变化，环境里只有 2 个时索引越界
 // （returns undefined 会让后面的 .replace 抛错）。
-const dblClicked = await evaluate(`(() => {
+const branchClicked = await evaluate(`(() => {
   const rows = document.querySelectorAll('#wt-body tr[data-path]')
   if (!rows.length) return ''
   const target = rows[2] || rows[rows.length - 1]
-  target.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))
+  const btn = target.querySelector('.branch-link')
+  if (!btn) return ''
+  btn.click()
   return target.dataset.path
 })()`)
 await sleep(2200)
-const dblMeta = await evaluate(`document.getElementById('log-meta').textContent`)
-const dblFocus = await evaluate(`document.querySelector('#wt-body tr.wt-focused')?.dataset.path`)
-checks.push(['双击行切换日志',
-  Boolean(dblClicked.value) && dblMeta.value?.includes(String(dblClicked.value).replace(/^\/home\/[^/]+\//, '~/')),
-  dblMeta.value])
-checks.push(['切换行高亮', dblFocus.value === dblClicked.value, dblFocus.value?.split('/').pop()])
+const clickMeta = await evaluate(`document.getElementById('log-meta').textContent`)
+const clickFocus = await evaluate(`document.querySelector('#wt-body tr.wt-focused')?.dataset.path`)
+checks.push(['点分支名切换日志',
+  Boolean(branchClicked.value) && clickMeta.value?.includes(String(branchClicked.value).replace(/^\/home\/[^/]+\//, '~/')),
+  clickMeta.value])
+checks.push(['切换行高亮', clickFocus.value === branchClicked.value, clickFocus.value?.split('/').pop()])
 
 // 全部分支视图在两个 worktree 下应一致
 const allInWt1 = await evaluate(`(async () => {

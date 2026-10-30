@@ -3,6 +3,7 @@ import { fuzzyScore, rankByFuzzy } from '/fuzzy.js'
 import { linkify } from '/linkify.js'
 import { validSshTarget, vscodeRemoteUri, sshCommand, zedRemoteCommand } from '/open-remote.js'
 import { copyText } from '/clipboard.js'
+import { prefOfWorktree, pickWorktree } from '/log-wt.js'
 const $ = (id) => document.getElementById(id)
 const state = {
   repos: [],
@@ -17,6 +18,8 @@ const state = {
   logRev: 'HEAD',
   logFilter: '',
   commitsAll: [],      // 未过滤的当前批
+  logHasMore: false,   // 后端还有下一页（滚动到底自动加载）
+  logLoading: false,
   selectedSha: null,
   pending: null,       // 当前 worktree 的未提交改动摘要 { count, add, del, untracked, wt }
   selectedFile: null,
@@ -233,9 +236,47 @@ async function selectRepo(toplevel, force = false) {
 }
 
 // ---------- worktree 日志选择器 ----------
+// 当前看哪个 worktree 的日志只记在浏览器里（localStorage），按仓库各存一份。
+// 记录分支而不是只记目录：worktree 删了重建目录会变，分支才是用户想看的那个。
+const LOG_WT_KEY = 'wsl-worktree.logWt'
+
+function readLogWtStore() {
+  try {
+    const all = JSON.parse(localStorage.getItem(LOG_WT_KEY) || '{}')
+    return all && typeof all === 'object' ? all : {}
+  } catch { return {} }
+}
+
+function readLogWtPref(repo = state.repo) {
+  if (!repo) return null
+  const pref = readLogWtStore()[repo.toplevel]
+  return pref && typeof pref === 'object' ? pref : null
+}
+
+function writeLogWtPref(wt) {
+  if (!state.repo) return
+  try {
+    const all = readLogWtStore()
+    if (wt) all[state.repo.toplevel] = prefOfWorktree(wt)
+    else delete all[state.repo.toplevel]
+    localStorage.setItem(LOG_WT_KEY, JSON.stringify(all))
+  } catch {}
+}
+
+/** 把行高亮同步到 state.logWt（下拉框、点击分支名都走这里） */
+function syncWtFocus() {
+  for (const row of $('wt-body').children) {
+    row.classList.toggle('wt-focused', row.dataset.path === state.logWt)
+  }
+}
+
 function renderWtSelect() {
   const sel = $('wt-select')
-  const prev = state.logWt
+  const prev = state.worktrees.find((w) => w.path === state.logWt && !w.prunable)
+  const stored = pickWorktree(state.worktrees, readLogWtPref())
+  const main = state.worktrees.find((w) => w.isMain && !w.prunable)
+  const pick = prev || stored || main || state.worktrees.find((w) => !w.prunable) || null
+
   const frag = document.createDocumentFragment()
   for (const wt of state.worktrees) {
     const opt = document.createElement('option')
@@ -250,30 +291,31 @@ function renderWtSelect() {
     frag.appendChild(opt)
   }
   sel.replaceChildren(frag)
-  if (prev && state.worktrees.some((w) => w.path === prev && !w.prunable)) {
-    sel.value = prev
-    state.logWt = prev
-  } else {
-    const main = state.worktrees.find((w) => w.isMain && !w.prunable)
-    const pick = main || state.worktrees.find((w) => !w.prunable)
-    sel.value = pick?.path ?? ''
-    state.logWt = pick?.path ?? null
-  }
+  sel.value = pick?.path ?? ''
+  state.logWt = pick?.path ?? null
+  // 恢复到的新目录也写回去，下次刷新直接命中
+  writeLogWtPref(pick)
+  syncWtFocus()
   sel.disabled = state.worktrees.length === 0
   $('rev-select').disabled = state.worktrees.length === 0
 }
 
 $('wt-select').addEventListener('change', (e) => {
   state.logWt = e.target.value || null
-  // 切换 worktree 后「当前分支」的含义变了，回到默认语义重新拉取
-  if (state.logRev === 'HEAD') loadLog(true)
-  else loadLog(true)
+  writeLogWtPref(state.worktrees.find((w) => w.path === state.logWt) || null)
+  syncWtFocus()
+  // 切换 worktree 后「当前分支」的含义变了，必须重新拉日志
+  loadLog(true)
 })
 
-/** 双击 worktree 行 = 把日志切到那个 worktree */
+/** 点击分支名 / 下拉框选择 = 把日志切到那个 worktree */
 function focusWorktree(wtPath) {
+  const wt = state.worktrees.find((w) => w.path === wtPath)
+  if (!wt || wt.prunable || state.logWt === wtPath) return
   state.logWt = wtPath
   $('wt-select').value = wtPath
+  writeLogWtPref(wt)
+  syncWtFocus()
   loadLog(true)
   $('log-scroll').scrollTop = 0
   toast(`日志已切换到 ${wtPath.replace(/^\/home\/[^/]+\//, '~/')}`)
@@ -302,7 +344,7 @@ function renderWorktrees() {
     const tr = document.createElement('tr')
     tr.dataset.path = wt.path
     if (wt.path === state.logWt) tr.className = 'wt-focused'
-    tr.title = '双击切换到此 worktree 的日志'
+    tr.title = '点击分支名查看该 worktree 的日志'
 
     const dot = document.createElement('td')
     if (wt.isMain) dot.innerHTML = '<span class="main-dot" title="主工作树"></span>'
@@ -313,7 +355,7 @@ function renderWorktrees() {
     const branch = document.createElement('td')
     const bcls = wt.isMain ? 'branch main-branch' : 'branch'
     const label = wt.detached ? `(detached @ ${(wt.head || '').slice(0, 7)})` : (wt.branch || '?')
-    branch.innerHTML = `<span class="${bcls}" title="${esc(label)}">${esc(label)}</span>`
+    branch.innerHTML = `<button type="button" class="${bcls} branch-link" title="切换到该 worktree 的日志：${esc(label)}">${esc(label)}</button>`
     tr.appendChild(branch)
 
     const path = document.createElement('td')
@@ -659,6 +701,12 @@ function buildWtMenu(wt) {
 }
 
 $('wt-body').addEventListener('click', async (e) => {
+  // 点分支名切日志；放在「更多」按钮判断之前，两者互不重叠
+  const branchBtn = e.target.closest('.branch-link')
+  if (branchBtn) {
+    focusWorktree(branchBtn.closest('tr')?.dataset.path)
+    return
+  }
   const btn = e.target.closest('.icon-btn')
   if (!btn || btn.disabled) return
   const tr = btn.closest('tr')
@@ -681,16 +729,6 @@ $('wt-body').addEventListener('click', async (e) => {
   } catch (err) {
     toast(`打开失败: ${err.message}`, true)
   }
-})
-
-// 双击 worktree 行 → 把它设为日志来源
-$('wt-body').addEventListener('dblclick', (e) => {
-  const tr = e.target.closest('tr[data-path]')
-  if (!tr || e.target.closest('.icon-btn')) return
-  const wt = state.worktrees.find((w) => w.path === tr.dataset.path)
-  if (wt?.prunable) { toast('该 worktree 目录已失效，无法查看日志', true); return }
-  focusWorktree(tr.dataset.path)
-  for (const row of $('wt-body').children) row.classList.toggle('wt-focused', row === tr)
 })
 
 // ---------- log ----------
@@ -720,11 +758,25 @@ async function loadPending() {
   }
 }
 
+let logSeq = 0
+
 async function loadLog(reset = false) {
   if (!state.repo) return
-  if (reset) { state.logSkip = 0; state.commitsAll = [] }
+  // 加载更多时直接吞掉重复触发；reset 可以打断在飞的请求（切 worktree / 刷新）
+  if (!reset && (state.logLoading || !state.logHasMore)) return
+  if (reset) {
+    state.logSkip = 0
+    state.commitsAll = []
+    state.logHasMore = true
+  }
+  const seq = ++logSeq
+  state.logLoading = true
   const body = $('log-body')
-  if (reset) body.innerHTML = '<tr><td colspan="4" class="empty" style="padding:18px">加载中…</td></tr>'
+  const refreshBtn = $('btn-log-refresh')
+  if (reset) {
+    body.innerHTML = '<tr><td colspan="4" class="empty" style="padding:18px">加载中…</td></tr>'
+    refreshBtn.classList.add('spinning')
+  }
   try {
     const params = new URLSearchParams({
       rev: state.logRev,
@@ -737,17 +789,26 @@ async function loadLog(reset = false) {
       api(`/api/repos/${state.repo.id}/log?${params}`),
       loadPending(),
     ])
+    // 期间又切了 worktree / 点了刷新：丢弃过期响应，别把两次结果拼在一起
+    if (seq !== logSeq) return
     state.pending = pending
     if (reset) state.commitsAll = data.commits
     else state.commitsAll = state.commitsAll.concat(data.commits)
     state.logSkip = state.commitsAll.length
-    $('btn-more').hidden = data.commits.length < state.logCount
+    state.logHasMore = data.commits.length >= state.logCount
     // 把实际执行的 cwd 显示出来，方便确认看的是哪个 worktree
     $('log-meta').textContent = data.cwd ? data.cwd.replace(/^\/home\/[^/]+\//, '~/') : ''
     renderLog()
   } catch (err) {
+    if (seq !== logSeq) return
     body.innerHTML = `<tr><td colspan="4" class="empty" style="color:var(--red)">${esc(err.message)}</td></tr>`
     $('log-meta').textContent = ''
+    state.logHasMore = false
+  } finally {
+    if (seq === logSeq) {
+      state.logLoading = false
+      refreshBtn.classList.remove('spinning')
+    }
   }
 }
 
@@ -824,7 +885,16 @@ $('rev-select').addEventListener('change', (e) => {
   loadLog(true)
 })
 
-$('btn-more').addEventListener('click', () => loadLog(false))
+$('btn-log-refresh').addEventListener('click', () => {
+  if (state.repo) loadLog(true)
+})
+
+// 滚动到底部时继续加载下一页，替代原来的「加载更多」按钮
+$('log-scroll').addEventListener('scroll', () => {
+  if (!state.logHasMore || state.logLoading) return
+  const el = $('log-scroll')
+  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) loadLog(false)
+}, { passive: true })
 
 // ---------- commit detail ----------
 async function selectCommit(sha) {
