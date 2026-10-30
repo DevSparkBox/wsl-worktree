@@ -187,6 +187,11 @@ checks.push(['点击 commit', /^[0-9a-f]{40}$/.test(commitClicked.value || ''), 
 const fileRows = await evaluate(`document.querySelectorAll('.file-row').length`)
 checks.push(['文件清单渲染', fileRows.value > 0, `${fileRows.value} 个文件`])
 
+// 打开提交不再自动展开 diff，点第一个文件行才展开
+const patchBefore = await evaluate(`document.querySelectorAll('.patch span').length`)
+checks.push(['默认不展开 diff', patchBefore.value === 0, `${patchBefore.value} 行`])
+await evaluate(`document.querySelector('.file-row')?.click()`)
+await sleep(1500)
 const patchLines = await evaluate(`document.querySelectorAll('.patch span').length`)
 checks.push(['diff 渲染', patchLines.value > 0, `${patchLines.value} 行`])
 
@@ -203,7 +208,7 @@ const switchFile = await evaluate(`(() => {
   return rows[1].dataset.path
 })()`)
 await sleep(1500)
-const activePath = await evaluate(`document.querySelector('.file-row.active')?.dataset.path`)
+const activePath = await evaluate(`document.querySelector('.file-row.open')?.dataset.path`)
 checks.push(['切换文件', switchFile.value === activePath.value, `${(switchFile.value||'').slice(0,50)}`])
 await shot(join(SHOTS, 'file2.png'))
 

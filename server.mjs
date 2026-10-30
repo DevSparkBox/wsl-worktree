@@ -14,7 +14,7 @@ import { getWorktreeChanges } from './lib/changes.mjs'
 import { grepTree } from './lib/grep.mjs'
 import { refsAtCommit, listRefTipCommits } from './lib/refs.mjs'
 import { compareCommits, compareFile } from './lib/compare.mjs'
-import { LOG_FMT, parseLog } from './lib/logfmt.mjs'
+import { LOG_FMT, MESSAGE_FMT, parseLog, parseCommitMessage } from './lib/logfmt.mjs'
 import { startClone, getClone, hasRunningClone } from './lib/clone.mjs'
 import { openTarget, describeApps, normalizeApps, platformInfo } from './lib/open.mjs'
 
@@ -129,7 +129,10 @@ async function getCommitStat(toplevel, sha) {
   }
   const res = await git(toplevel, args)
   if (res.code !== 0) return { error: res.stderr, files: [], parents }
-  return { files: parseNumstatZ(res.stdout), parents, isMerge: parents.length > 1 }
+  // message 取失败不影响文件清单：详情仍能列出改动文件
+  const msg = await git(toplevel, ['show', '-s', `--format=${MESSAGE_FMT}`, sha], { timeout: 8000 })
+  const { subject, body } = msg.code === 0 ? parseCommitMessage(msg.stdout) : { subject: '', body: '' }
+  return { files: parseNumstatZ(res.stdout), parents, isMerge: parents.length > 1, subject, body }
 }
 
 /**

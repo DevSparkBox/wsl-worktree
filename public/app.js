@@ -896,11 +896,36 @@ $('log-scroll').addEventListener('scroll', () => {
   if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) loadLog(false)
 }, { passive: true })
 
+// 全部展开后只画视口附近的 diff，滚到哪画到哪。
+// 「改动文件」行吸到顶部时才露出文件下拉框。offsetTop 不随滚动变化，
+// 只能比它和滚动容器的可视位置：message 还在上面时两者是错开的。
+function syncFileJump() {
+  const scroller = $('detail-body')
+  const title = scroller.querySelector('.detail-sec-title')
+  if (!title) return
+  const stuck = scroller.scrollTop > 0
+    && title.getBoundingClientRect().top - scroller.getBoundingClientRect().top < 1
+  title.classList.toggle('stuck', stuck)
+  // 下拉框显示标题栏下面当前那一行的文件，而不是固定的占位文字
+  const jump = title.querySelector('.file-jump')
+  if (!jump || document.activeElement === jump) return
+  const line = title.getBoundingClientRect().bottom + 1
+  const row = [...scroller.querySelectorAll('.file-row')].find((el) => el.getBoundingClientRect().bottom > line)
+  if (row) jump.value = row.dataset.path
+}
+$('detail-body').addEventListener('scroll', () => {
+  syncFileJump()
+  // 跳转对齐期间拆掉视口外的 diff 会让行的位置变矮，刚算好的滚动距离立刻失效
+  if (!pinning) paintVisiblePatches()
+}, { passive: true })
+
 // ---------- commit detail ----------
 async function selectCommit(sha) {
   const isPending = sha === 'WORKTREE'
   state.selectedSha = sha
   state.selectedFile = null
+  // 上一个提交还在逐个展开的任务作废，别把 diff 写到新的详情里
+  expandGen++
   syncFileTreeBtn()
   // 窄屏时把详情抽屉滑出（同步顶栏按钮状态，走同一个开关避免状态不一致）
   if (window.matchMedia('(max-width: 1180px)').matches && $('layout').classList.contains('hide-right')) {
@@ -923,33 +948,67 @@ async function selectCommit(sha) {
     const q = isPending && state.pending?.wt ? `?wt=${encodeURIComponent(state.pending.wt)}` : ''
     const data = await api(`/api/repos/${state.repo.id}/commit/${sha}${q}`)
     state.detailFiles = data.files
-    renderFileList(c, data.files)
+    renderFileList(c, data.files, data)
   } catch (err) {
     $('detail-body').innerHTML = `<div class="empty" style="color:var(--red)">${esc(err.message)}</div>`
   }
 }
 
-function renderFileList(commit, files) {
+function renderFileList(commit, files, detail = {}) {
   const body = $('detail-body')
   const frag = document.createDocumentFragment()
 
   if (commit) {
+    // message 单独一块，不要用 section 标题的粘性样式：那会压住后面的文件列表。
+    // 标题用日志里已有的 subject；正文只在详情接口里取，没有就只显示标题。
     const head = document.createElement('div')
-    head.className = 'detail-sec-title'
+    head.className = 'detail-msg'
+    const subject = document.createElement('div')
+    subject.className = 'detail-subject'
     // 提交信息里的外链要可点击（内部常用的 TAPD / Jira 链接）
-    head.innerHTML = linkify(commit.subject || '(无标题)')
+    subject.innerHTML = linkify(detail.subject || commit.subject || '(无标题)')
+    head.appendChild(subject)
+    if (detail.body) {
+      const msgBody = document.createElement('div')
+      msgBody.className = 'detail-body-text'
+      msgBody.innerHTML = linkify(detail.body)
+      head.appendChild(msgBody)
+    }
     frag.appendChild(head)
 
+    const parents = detail.parents?.length ? detail.parents : commit.parents
     const meta = document.createElement('div')
-    meta.style.cssText = 'padding:6px 10px;font-size:11.5px;color:var(--text-dim);border-bottom:1px solid var(--border)'
-    meta.innerHTML = `<span class="mono">${commit.sha.slice(0, 12)}</span>` +
-      (commit.parents.length ? ` · 父 ${commit.parents.map((p) => `<span class="mono">${p.slice(0, 7)}</span>`).join(' ')}` : ' · 初始提交')
+    meta.className = 'detail-parents'
+    meta.innerHTML = parents.length
+      ? `父提交 ${parents.map((p) => `<span class="mono">${p.slice(0, 7)}</span>`).join(' ')}`
+      : '初始提交'
     frag.appendChild(meta)
   }
 
   const sec = document.createElement('div')
   sec.className = 'detail-sec-title'
-  sec.textContent = (state.selectedSha === 'WORKTREE' ? '未提交的文件' : '改动文件') + ` (${files.length})`
+  const label = document.createElement('span')
+  label.textContent = (state.selectedSha === 'WORKTREE' ? '未提交的文件' : '改动文件') + ` (${files.length})`
+  sec.appendChild(label)
+  if (files.length) {
+    const actions = document.createElement('span')
+    actions.className = 'detail-sec-actions'
+    actions.appendChild(fileFoldBtn('expand', '全部展开'))
+    actions.appendChild(fileFoldBtn('collapse', '全部收起'))
+    sec.appendChild(actions)
+    // 只在这一行吸到滚动容器顶部时显示：平时文件列表就在下面，不需要再选一次
+    const jump = document.createElement('select')
+    jump.className = 'select file-jump'
+    jump.title = '切换文件'
+    jump.setAttribute('aria-label', '切换文件')
+    for (const f of files) {
+      const opt = document.createElement('option')
+      opt.value = f.path
+      opt.textContent = f.oldPath ? `${f.oldPath} → ${f.path}` : f.path
+      jump.appendChild(opt)
+    }
+    sec.appendChild(jump)
+  }
   frag.appendChild(sec)
 
   if (!files.length) {
@@ -967,53 +1026,216 @@ function renderFileList(commit, files) {
       ? '<span style="color:var(--text-faint)">bin</span>'
       : `<span class="plus">+${f.add}</span> <span class="minus">−${f.del}</span>`
     const label = f.oldPath ? `${f.oldPath} → ${f.path}` : f.path
-    // 行尾的「历史」图标：hover 才显形，避免干扰「点整行看 diff」
-    row.innerHTML = `<span class="file-path" title="${esc(label)}">${esc(f.path)}</span>` +
+    // 行尾的「历史」图标：hover 才显形，避免干扰「点整行展开 diff」
+    row.innerHTML = `<span class="file-caret" aria-hidden="true"></span>` +
+      `<span class="file-path" title="${esc(label)}">${esc(f.path)}</span>` +
       `<span class="file-stat">${stat}</span>` +
       `<button class="file-hist-btn" title="查看该文件的提交历史（新标签页）" aria-label="文件历史">` +
       `<svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">` +
       `<circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.4"/>` +
       `<path d="M8 4.8V8l2.2 1.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></button>`
     frag.appendChild(row)
+
+    // diff 跟在自己的文件行下面，点一次展开、再点收起；多个文件可以同时展开
+    const holder = document.createElement('div')
+    holder.className = 'patch-holder'
+    holder.hidden = true
+    frag.appendChild(holder)
   }
 
   body.replaceChildren(frag)
-
-  if (files.length) {
-    // 默认加载第一个文件
-    const first = body.querySelector('.file-row')
-    if (first) openFile(first)
-  }
 }
 
-async function openFile(rowEl) {
+/** 「改动文件」标题旁的展开/收起。chevrons 是编辑器里通用的折叠图标。 */
+function fileFoldBtn(action, title) {
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'icon-btn file-fold-btn'
+  btn.dataset.action = action
+  btn.title = title
+  btn.setAttribute('aria-label', title)
+  btn.innerHTML = action === 'expand'
+    ? '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+      '<path d="M4.5 3.5 8 6.5 11.5 3.5M4.5 8.5 8 11.5 11.5 8.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+    : '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden="true">' +
+      '<path d="M4.5 6.5 8 3.5 11.5 6.5M4.5 11.5 8 8.5 11.5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+  return btn
+}
+
+function collapseFile(rowEl) {
+  const holder = rowEl.nextElementSibling
+  if (!holder || !holder.classList.contains('patch-holder') || holder.hidden) return
+  holder.hidden = true
+  rowEl.classList.remove('open')
+  if (state.selectedFile === rowEl.dataset.path) state.selectedFile = null
+}
+
+/** 展开一个文件的 diff。同一路径只拉一次。paint=false 时只占位，等滚进视口再画。 */
+async function expandFile(rowEl, { paint = true, gen } = {}) {
+  const holder = rowEl.nextElementSibling
+  if (!holder || !holder.classList.contains('patch-holder')) return
   const path = rowEl.dataset.path
+  rowEl.classList.add('open')
+  holder.hidden = false
   state.selectedFile = path
-  for (const el of $('detail-body').querySelectorAll('.file-row')) {
-    el.classList.toggle('active', el === rowEl)
+  if (holder.dataset.loaded === path) {
+    if (paint) paintHolder(holder)
+    return
   }
-  let holder = $('detail-body').querySelector('.patch-holder')
-  if (!holder) {
-    holder = document.createElement('div')
-    holder.className = 'patch-holder'
-    $('detail-body').appendChild(holder)
-  }
-  holder.innerHTML = '<div class="empty">加载 diff…</div>'
+  holder.dataset.loaded = ''
+  holder.textContent = ''
+  holder.appendChild(Object.assign(document.createElement('div'), { className: 'empty', textContent: '加载 diff…' }))
   try {
     // 未提交的 diff 要在具体 worktree 里跑
     const wtq = state.selectedSha === 'WORKTREE' && state.pending?.wt ? `&wt=${encodeURIComponent(state.pending.wt)}` : ''
     const data = await api(`/api/repos/${state.repo.id}/diff?sha=${state.selectedSha}&path=${encodeURIComponent(path)}${wtq}`)
-    holder.replaceChildren(renderPatch(data.patch, data.truncated))
-    // 滚动到 patch 顶部
-    const scroll = $('detail-body')
-    scroll.scrollTop = holder.offsetTop - 40
+    // 期间换了提交或点了全部收起：结果作废，别写进已经换掉的详情里
+    if (!holder.isConnected || (gen !== undefined && gen !== expandGen)) return
+    holder.dataset.patch = data.patch || ''
+    holder.dataset.truncated = data.truncated ? '1' : ''
+    holder.dataset.loaded = path
+    holder.dataset.painted = ''
+    if (paint) paintHolder(holder)
   } catch (err) {
-    holder.innerHTML = `<div class="empty" style="color:var(--red)">${esc(err.message)}</div>`
+    if (!holder.isConnected) return
+    holder.textContent = ''
+    const d = document.createElement('div')
+    d.className = 'empty'
+    d.style.color = 'var(--red)'
+    d.textContent = err.message
+    holder.appendChild(d)
   }
 }
 
+/** 视口外的大 diff 先不建 DOM，滚回来再画，避免一次展开把页面撑死。 */
+function paintHolder(holder) {
+  if (holder.dataset.painted === '1' || holder.dataset.loaded === '') return
+  const box = renderPatch(holder.dataset.patch || '', holder.dataset.truncated === '1')
+  holder.textContent = ''
+  holder.appendChild(box)
+  holder.dataset.painted = '1'
+}
+
+function releaseHolder(holder) {
+  if (holder.dataset.painted !== '1') return
+  holder.textContent = ''
+  holder.dataset.painted = ''
+}
+
+/** 点文件行：已展开则收起，否则在该行下方展开 diff。 */
+function toggleFile(rowEl) {
+  const holder = rowEl.nextElementSibling
+  if (holder && !holder.hidden) collapseFile(rowEl)
+  else expandFile(rowEl)
+}
+
+// 全部展开按小批量拉：一个一个拉时，点下拉框跳到后面的文件要等前面全部回来。
+// 同时画几百份 DOM 才会卡死，所以这里并发 4 个、只存文本不画。
+// 换提交或点「全部收起」时 generation 加一，在飞的请求结果直接丢弃。
+let expandGen = 0
+let expandAllDone = Promise.resolve()
+async function expandAllFiles() {
+  const gen = ++expandGen
+  let resolveDone
+  expandAllDone = new Promise((r) => { resolveDone = r })
+  try {
+    const rows = [...$('detail-body').querySelectorAll('.file-row')]
+    for (let i = 0; i < rows.length; i += 4) {
+      if (gen !== expandGen) return
+      await Promise.all(rows.slice(i, i + 4).map((row) => expandFile(row, { paint: false, gen })))
+    }
+    if (gen === expandGen) paintVisiblePatches()
+  } finally {
+    resolveDone()
+  }
+}
+
+// 跳转对齐期间不能边滚边拆 DOM，否则行的位置一直变，算出来的滚动距离是旧的
+let pinning = false
+function paintVisiblePatches() {
+  if (pinning) return
+  const scroller = $('detail-body')
+  const top = scroller.scrollTop
+  const bottom = top + scroller.clientHeight
+  const margin = scroller.clientHeight
+  for (const holder of scroller.querySelectorAll('.patch-holder')) {
+    if (holder.hidden || !holder.dataset.loaded) continue
+    const y = holder.offsetTop
+    const h = holder.offsetHeight || 24
+    if (y + h < top - margin || y > bottom + margin) releaseHolder(holder)
+    else paintHolder(holder)
+  }
+}
+
+function setAllFiles(open) {
+  expandGen++
+  if (!open) {
+    for (const row of $('detail-body').querySelectorAll('.file-row')) collapseFile(row)
+    return
+  }
+  expandAllFiles()
+}
+
+/**
+ * 把文件行滚到吸顶标题正下方。
+ * 末尾几个文件滚不到那么靠上，滚动会被夹在底部。这时不能用夹住后的位置再算一次，
+ * 否则差值又变成「要往上滚」，页面就跳回顶部了。滚不到就停在底部。
+ */
+function alignFileRow(row) {
+  const scroller = $('detail-body')
+  const title = scroller.querySelector('.detail-sec-title')
+  const stuck = scroller.scrollTop > 0
+    && title.getBoundingClientRect().top - scroller.getBoundingClientRect().top < 1
+  const titleH = stuck ? title.offsetHeight : title.scrollHeight
+  const want = scroller.scrollTop
+    + row.getBoundingClientRect().top
+    - scroller.getBoundingClientRect().top
+    - titleH
+  const max = Math.max(0, scroller.scrollHeight - scroller.clientHeight)
+  const next = Math.max(0, Math.min(want, max))
+  if (Math.abs(scroller.scrollTop - next) > 1) scroller.scrollTop = next
+}
+
+/** 吸顶后的下拉框：滚到该文件行并展开。滚完重置，下一次还能选同一个文件。 */
+async function jumpToFile(path) {
+  const scroller = $('detail-body')
+  const row = [...scroller.querySelectorAll('.file-row')].find((el) => el.dataset.path === path)
+  const jump = scroller.querySelector('.file-jump')
+  if (!row) return
+  pinning = true
+  try {
+  // 全部展开还在拉时，行的位置一直在变，等它拉完再对齐
+  await expandAllDone
+  if (!row.isConnected) return
+  // 滚出视口的 diff 只留了占位，行的位置是矮的，按它算会停在半路。
+  // 还在加载的只能用占位高度，画得动的先画回来。
+  for (const holder of scroller.querySelectorAll('.patch-holder')) {
+    if (!holder.hidden && holder.dataset.loaded) paintHolder(holder)
+  }
+  alignFileRow(row)
+  await expandFile(row)
+  // expandFile 在数据回来后才画 DOM，画完这一帧行的位置才稳定
+  await new Promise((r) => requestAnimationFrame(r))
+  alignFileRow(row)
+  if (jump) jump.value = path
+  } finally {
+    pinning = false
+    paintVisiblePatches()
+  }
+}
+
+$('detail-body').addEventListener('change', (e) => {
+  if (!e.target.classList.contains('file-jump')) return
+  if (e.target.value) jumpToFile(e.target.value)
+})
+
 $('detail-body').addEventListener('click', (e) => {
-  // 先判历史按钮：它在 .file-row 内部，不拦的话会同时触发 openFile
+  const foldBtn = e.target.closest('.file-fold-btn')
+  if (foldBtn) {
+    setAllFiles(foldBtn.dataset.action === 'expand')
+    return
+  }
+  // 先判历史按钮：它在 .file-row 内部，不拦的话会同时触发展开 diff
   const histBtn = e.target.closest('.file-hist-btn')
   if (histBtn) {
     e.stopPropagation()
@@ -1022,7 +1244,7 @@ $('detail-body').addEventListener('click', (e) => {
     return
   }
   const row = e.target.closest('.file-row')
-  if (row) openFile(row)
+  if (row) toggleFile(row)
 })
 
 // ---------- 文件历史（新标签页） ----------
@@ -1087,22 +1309,29 @@ function syncFileTreeBtn() {
 
 $('detail-close').addEventListener('click', () => setPanel('right', false))
 
+/** diff --git / index / --- / +++ 这些头部命令行对看改动没有用，展开后只留 hunk 和增删行 */
+function isDiffHeader(line) {
+  return line.startsWith('diff ') || line.startsWith('index ') ||
+    line.startsWith('---') || line.startsWith('+++') ||
+    line.startsWith('new file') || line.startsWith('deleted file') ||
+    line.startsWith('similarity') || line.startsWith('rename ') ||
+    line.startsWith('old mode') || line.startsWith('new mode') ||
+    line.startsWith('Binary files')
+}
+
 function renderPatch(patch, truncated) {
   const box = document.createElement('pre')
   box.className = 'patch'
-  if (!patch) {
+  const lines = (patch || '').split('\n').filter((line) => !isDiffHeader(line))
+  while (lines.length && lines[lines.length - 1] === '') lines.pop()
+  if (!lines.length) {
     box.innerHTML = '<span class="meta">(无内容，可能是二进制文件或纯重命名)</span>'
     return box
   }
   const frag = document.createDocumentFragment()
-  for (const line of patch.split('\n')) {
+  for (const line of lines) {
     const span = document.createElement('span')
     if (line.startsWith('@@')) span.className = 'hunk'
-    else if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff ') || line.startsWith('index ') ||
-             line.startsWith('new file') || line.startsWith('deleted file') || line.startsWith('similarity') ||
-             line.startsWith('rename ') || line.startsWith('old mode') || line.startsWith('new mode') ||
-             line.startsWith('Binary files'))
-      span.className = 'meta'
     else if (line.startsWith('+')) span.className = 'add'
     else if (line.startsWith('-')) span.className = 'del'
     else span.className = 'ctx'

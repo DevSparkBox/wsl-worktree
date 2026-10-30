@@ -371,7 +371,7 @@ if (e.target.closest('a.ext-link')) return
 | 行内「更多」菜单 | VS Code / Zed / 资源管理器 / 终端 / 复制 UNC 路径 / 删除 worktree（红色，二次确认）；浏览器不在服务器上时换成远程打开，见「[远程访问](#远程访问浏览器不在服务器上)」 |
 | 提交日志 | 分页 200 条，**滚动到底自动加载**；右上角图标刷新；**点分支名或下拉框切换 worktree**；`当前分支` / `全部分支` 切换；message/sha/作者 过滤 |
 | 工单链接可点 | commit message 里的 http(s) URL 自动变链接，新标签页打开 |
-| 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件 → 着色 diff |
+| 变更对比 | 点 commit → 文件清单（+/- 行数，含重命名）→ 点文件行展开/收起着色 diff（可同时展开多个） |
 | 单文件历史 | 文件行 hover 时钟图标，或顶栏右上角「文件历史」→ 新标签页（列表 + diff 双栏，支持改名跟踪） |
 | 完整文件树 | 详情面板右上角「文件树」→ 新标签页（整仓库快照，左树右内容，仿 fork） |
 | 合并单链目录 | 文件树默认把 com/mysoft/jmpt 这类单链压成一行，可开关 |
@@ -786,7 +786,7 @@ else rank = fuzzyScore(q, f.path)               // 兜底：路径模糊匹配
 
 | 入口 | 说明 |
 |---|---|
-| 提交详情的文件行 | 行尾时钟图标，**hover 才显形**（不干扰「点整行看 diff」）。直接打开**该文件**的历史 |
+| 提交详情的文件行 | 行尾时钟图标，**hover 才显形**（不干扰「点整行展开 diff」）。直接打开**该文件**的历史 |
 | 顶栏右上角 | 「文件历史」按钮，**常驻可见**（不依赖是否选中文件）。打开历史页并把**焦点放进路径输入框** |
 
 点击后都在**新标签页**打开 `/history.html`，左右双栏：左边是提交列表，右边是选中那次的 diff。
@@ -1592,6 +1592,7 @@ node test/unit/test-symbols.mjs
 node test/unit/test-open.mjs
 node test/unit/test-config.mjs
 node test/unit/test-log-wt.mjs
+node test/unit/test-logfmt.mjs
 
 # 接口级：自带隔离服务（7813）+ 临时仓库，跑完自动清理
 bash test/api/test-api.sh
@@ -1612,6 +1613,7 @@ node test/ui/test-ui-log-switch.mjs
 - `test/ui/test-ui-settings.mjs` 是纯 Linux UI 测试：自动起隔离服务 + 系统 Chrome 的 CDP，验证设置页只读端口/host、配置文件路径、通用配置与四类工具保存落盘、主界面菜单按平台显示。可用 `CHROME=/path/to/chrome`、`UI_PORT`、`CDP_PORT` 覆盖。
 - `test/ui/test-ui-log-switch.mjs` 也是纯 Linux UI 测试：造 450 个提交 + 一个 feat worktree，验证点分支名切换日志、双击不再切换、刷新后恢复记住的分支、刷新按钮拉到新 HEAD、滚到底自动翻页。同样支持 `CHROME` / `UI_PORT` / `CDP_PORT`。
 - `test/unit/test-log-wt.mjs`：`public/log-wt.js` 的纯函数测试，覆盖按分支优先/目录兜底、detached、失效 worktree 回退。
+- `test/unit/test-logfmt.mjs`：`parseCommitMessage` 的纯函数测试，覆盖只有标题、标题加正文、空输出。
 - **`test/ui/` 下的旧脚本（`test-ui.mjs` 等、`test-layout.mjs`）仍是旧环境**：CDP 驱动 Edge、通过 `wsl.exe` 造仓库、部分依赖 `jm_java`。迁移到纯 Linux 需要抽公共启动器（Chrome / Chromium + 本地 fixture），这是后续工作；纯 Linux 上先以接口测试、上面两个 `test-ui-*.mjs` 和手工页面验证为准。
 - UI 脚本结束前断言 `window.__errs` 为空；布局类测试用 `Input.dispatchMouseEvent` / `Input.dispatchKeyEvent` 发真实事件。
 

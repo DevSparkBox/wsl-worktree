@@ -566,6 +566,27 @@ body.resizing * { cursor: col-resize !important; }
 .ref-br { background: var(--accent-soft); color: var(--accent); }
 
 /* ---------- detail ---------- */
+.detail-msg {
+  padding: 8px 10px 6px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  border-bottom: 1px solid var(--border);
+  word-break: break-word;
+}
+.detail-subject { font-weight: 600; }
+.detail-body-text {
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+.detail-parents {
+  padding: 6px 10px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+
 .file-row {
   display: flex;
   align-items: center;
@@ -576,7 +597,24 @@ body.resizing * { cursor: col-resize !important; }
   border-bottom: 1px solid var(--border);
 }
 .file-row:hover { background: var(--bg-hover); }
-.file-row.active { background: var(--accent-soft); }
+.file-row.open { background: var(--accent-soft); }
+.file-caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-top: 3.5px solid transparent;
+  border-bottom: 3.5px solid transparent;
+  border-left: 5px solid var(--text-faint);
+}
+.file-row.open .file-caret {
+  border-left-color: transparent;
+  border-top: 5px solid var(--text);
+  border-bottom: 0;
+  border-right: 3.5px solid transparent;
+  border-left: 3.5px solid transparent;
+}
+.patch-holder { border-bottom: 1px solid var(--border); }
+.patch-holder .empty { padding: 10px; }
 .file-path {
   flex: 1;
   min-width: 0;
@@ -593,7 +631,10 @@ body.resizing * { cursor: col-resize !important; }
 .file-stat .minus { color: var(--del-text); }
 
 .detail-sec-title {
-  padding: 8px 10px 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
   font-size: 11px;
   font-weight: 600;
   color: var(--text-dim);
@@ -603,6 +644,28 @@ body.resizing * { cursor: col-resize !important; }
   top: 0;
   z-index: 2;
 }
+.detail-sec-actions { display: inline-flex; align-items: center; margin-left: 2px; }
+.file-fold-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 3px;
+  color: var(--text-faint);
+}
+.file-fold-btn:hover { background: var(--bg-hover); border-color: transparent; color: var(--text); }
+.file-fold-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 吸顶前列表就在标题下面，下拉框没必要占地方；吸顶后（不再贴着滚动容器顶端）才露出来 */
+.file-jump {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  margin-left: auto;
+}
+.detail-sec-title.stuck .file-jump { display: block; }
 
 .patch {
   margin: 0;
@@ -1111,6 +1174,7 @@ body.resizing * { cursor: col-resize !important; }
 
 /* ---------- 文件行的「历史」按钮：hover 才显形 ---------- */
 .file-row { position: relative; }
+.file-row.open:hover { background: var(--accent-soft); }
 .file-hist-btn {
   flex: none;
   display: flex;
