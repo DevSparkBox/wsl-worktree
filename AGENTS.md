@@ -91,7 +91,13 @@ journalctl --user -u wsl-worktree -n 50
    - 写操作统一返回 `{ ok, action, reason?, error? }`，成功 200、业务拒绝 409（前端靠 `reason` 出文案），并在成功后清掉 `stateCache` / `scanCache`。
 3. **前端**：新页面放 `public/`，独立 HTML + JS + CSS 一组；`public/` 之外的文件不会被服务。长耗时的次要信息（如 refs）拆成并行请求，不要拖慢主内容。
 4. **补测试**（见下），**补 README**：新功能加一节，接口加进 API 表，测试命令加进「测试」清单，新坑写进「实现中踩到的坑」或「边界情况处理」表。
-5. `bash install.sh` 后手工在浏览器过一遍，再跑相关测试。
+5. `bash install.sh` 后手工在浏览器过一遍，再跑测试——**改了代码就必须跑 UI 测试**，不能只跑 unit / api：
+   ```bash
+   node test/unit/test-*.mjs          # 纯逻辑，秒级
+   bash test/api/test-api.sh          # 隔离服务 7813，不碰 7801
+   node test/ui/test-ui-settings.mjs  # 真实浏览器点击，强制项
+   ```
+   后端改动的锅经常落在页面（返回结构、字段名、报错文案），unit / api 都看不出来；只改文档/注释时才可以跳过 UI 测试。
 
 ## git 调用的硬规则
 
@@ -119,11 +125,13 @@ journalctl --user -u wsl-worktree -n 50
 
 ## 测试
 
+**硬规则：只要动了代码（前端、后端、测试辅助都算），交付前必须跑 `node test/ui/test-ui-settings.mjs`。** 它用系统 Chrome + CDP 在真实页面上点击/输入，能抓到 unit 和 api 都抓不到的问题（DOM 结构、事件绑定、`navigator.clipboard` 这类只在浏览器里才有的能力、后端返回形状和页面对不上）。手工在浏览器里点过不能替代它：手工不会在每次改动后重跑。
+
 - **纯逻辑**（`test/unit/`）：`node test/unit/test-*.mjs`，秒级，WSL/Linux 都能跑。
 - **接口级**：`bash test/api/test-api.sh`。它会在仓库根 `.test-run/` 下生成临时配置和仓库，在 7813 起一个隔离服务，依次跑 `test/api/` 下的 8 个脚本（含会写配置的 `test-settings.mjs`），结束后清理。不会碰 7801 上的生产服务。
   - 单独跑某个脚本时：`BASE=http://127.0.0.1:7813 WT_TEST_TMP=$PWD/.test-run node test/api/test-ops.mjs`
   - 临时目录用 `WT_TEST_TMP`，不要再写死 `/tmp`；服务和测试进程可能不在同一个 mount namespace。
-- **UI 级**：`node test/ui/test-ui-settings.mjs` 已可在纯 Linux 跑（系统 Chrome + CDP，自动起隔离服务，验证设置页只读项/通用配置保存与平台菜单）。`test/ui/` 下其余脚本仍假设 Edge + `wsl.exe` + `jm_java`，尚未迁移；改 UI 时优先复用 `test-ui-settings.mjs` 的启动/清理方式，不要在单个脚本里再写死浏览器路径。
+- **UI 级**：`node test/ui/test-ui-settings.mjs` 已可在纯 Linux 跑（系统 Chrome + CDP，自动起隔离服务，验证设置页只读项/通用配置保存、主界面菜单按平台显示、打开方式切换与复制兜底）。新功能优先往这个脚本里继续加断言，别开新脚本。`test/ui/` 下其余脚本仍假设 Edge + `wsl.exe` + `jm_java`，尚未迁移；改 UI 时优先复用 `test-ui-settings.mjs` 的启动/清理方式，不要在单个脚本里再写死浏览器路径。
 - **`test/api/test-log-per-wt.mjs`** 只调 API，但依赖本机真实 `jm_java` 及其 worktree 存在，没有就跳过。
 
 测试脚本统一约定：
